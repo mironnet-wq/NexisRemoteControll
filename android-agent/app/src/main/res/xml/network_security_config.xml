@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Permitir conexoes HTTP e WebSockets sem criptografia (Cleartext) globalmente para testes locais -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

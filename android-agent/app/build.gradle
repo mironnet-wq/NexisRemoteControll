@@ -1,0 +1,118 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.nexis.remoteagent'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.nexis.remoteagent"
+        minSdk 26 // Android 8.0 Oreo
+        targetSdk 28
+        versionCode 1
+        versionName "1.0.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        // Build para provisionamento Device Owner (nao-debuggable, assinado com debug keystore)
+        provision {
+            signingConfig signingConfigs.debug
+            debuggable false
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+
+    // OkHttp para conexão WebSocket e download de APKs
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    
+    // Biblioteca WebRTC para Android (Fork atualizado mantido pelo GetStream)
+    implementation 'io.getstream:stream-webrtc-android:1.1.2'
+    
+    // Corrotinas Kotlin para concorrência
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
+
+// Copiar APK de provisionamento para o backend e gravar checksum da assinatura
+task copyApkToBackend(type: Copy) {
+    dependsOn 'assembleProvision'
+    from 'build/outputs/apk/provision/app-provision.apk'
+    into '../../backend/apks'
+    rename 'app-provision.apk', 'app-debug.apk'
+}
+
+task writeApkChecksum {
+    dependsOn copyApkToBackend
+    doLast {
+        def apk = file('../../backend/apks/app-debug.apk')
+        def checksumFile = file('../../backend/apks/app-debug.apk.checksum')
+        if (!apk.exists()) {
+            logger.warn('APK nao encontrado para gerar checksum.')
+            return
+        }
+
+        def sdkDir = android.sdkDirectory
+        def apksignerCandidates = fileTree(dir: new File(sdkDir, 'build-tools'), include: '**/apksigner.bat').files.sort()
+        if (apksignerCandidates.isEmpty()) {
+            logger.warn('apksigner nao encontrado. Checksum nao gravado.')
+            return
+        }
+
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine apksignerCandidates.last().absolutePath, 'verify', '--print-certs', apk.absolutePath
+            standardOutput = stdout
+        }
+
+        def checksum = null
+        stdout.toString().split('\n').each { line ->
+            if (line.contains('SHA-256 digest:')) {
+                def hex = line.split('SHA-256 digest:')[1].trim()
+                def bytes = new byte[hex.length() / 2]
+                for (int i = 0; i < bytes.length; i++) {
+                    bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16)
+                }
+                checksum = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+            }
+        }
+
+        if (checksum) {
+            checksumFile.text = checksum
+            logger.lifecycle("Checksum de provisionamento gravado: ${checksum}")
+        } else {
+            logger.warn('Nao foi possivel extrair checksum do APK.')
+        }
+    }
+}
+
+tasks.whenTaskAdded { task ->
+    if (task.name == 'assembleProvision') {
+        task.finalizedBy writeApkChecksum
+    }
+}
+

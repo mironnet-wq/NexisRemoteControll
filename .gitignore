@@ -1,0 +1,49 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Backend runtime data
+backend/location_history.json
+
+# Android / Gradle
+android-agent/.gradle/
+android-agent/.idea/
+android-agent/local.properties
+android-agent/**/build/
+android-agent/**/*.apk
+android-agent/**/*.ap_
+android-agent/**/*.dex
+android-agent/**/*.class
+android-agent/captures/
+android-agent/.externalNativeBuild/
+android-agent/.cxx/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs e temporários
+*.log
+*.tmp
+
+# APKs gerados (rebuild no CI/local)
+backend/apks/*.apk
+backend/apks/*.checksum
+
+# Cursor / agent
+.cursor/
+.geminiignore
+
+# Backups locais
+*.zip

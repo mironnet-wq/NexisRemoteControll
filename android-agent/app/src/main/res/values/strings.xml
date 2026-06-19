@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Nexis Agent</string>
+    <string name="accessibility_service_description">Serviço corporativo Nexis para permitir suporte remoto e injeção de toques e gestos pelo analista de TI.</string>
+</resources>

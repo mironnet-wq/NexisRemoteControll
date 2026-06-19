@@ -1,0 +1,6 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+pyjwt[crypto]>=2.8.0
+bcrypt>=4.0.1
+python-multipart>=0.0.6
+

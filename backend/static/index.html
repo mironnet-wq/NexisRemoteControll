@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexis Remote Control - Console de Suporte Corporativo</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS (Opcional - vamos usar CSS Puro e Responsivo para máxima customização) -->
+    <!-- Leaflet Maps API -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Fundo de Partículas Abstratas -->
+    <div class="bg-blur-container">
+        <div class="blur-circle blur-1"></div>
+        <div class="blur-circle blur-2"></div>
+    </div>
+
+    <!-- TELA DE LOGIN -->
+    <div id="login-container" class="login-wrapper">
+        <div class="login-card glass">
+            <div class="login-header">
+                <div class="logo">
+                    <i data-lucide="shield-alert" class="logo-icon animate-pulse"></i>
+                    <span>NEXIS</span>
+                    <span class="sub">Remote Control</span>
+                </div>
+                <p class="subtitle">Console de Controle de Dispositivos Corporativos</p>
+            </div>
+            
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="email"><i data-lucide="mail"></i> E-mail Corporativo</label>
+                    <input type="email" id="email" required placeholder="admin@nexis.com" value="admin@nexis.com">
+                </div>
+                <div class="form-group">
+                    <label for="password"><i data-lucide="lock"></i> Senha de Acesso</label>
+                    <input type="password" id="password" required placeholder="••••••••" value="admin123">
+                </div>
+                
+                <div class="error-message" id="login-error" style="display: none;">
+                    <i data-lucide="alert-triangle"></i>
+                    <span id="error-text">E-mail ou senha inválidos.</span>
+                </div>
+
+                <button type="submit" class="btn-primary" id="login-btn">
+                    <span>Entrar no Sistema</span>
+                    <i data-lucide="arrow-right"></i>
+                </button>
+            </form>
+            <div class="login-footer">
+                <p>Nexis Security Suite &copy; 2026. Acesso monitorado e auditado.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PAINEL PRINCIPAL (DASHBOARD) -->
+    <div id="dashboard-container" class="dashboard-wrapper" style="display: none;">
+        <!-- BARRA LATERAL (SIDEBAR) -->
+        <aside class="sidebar glass">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i data-lucide="shield-check" class="logo-icon"></i>
+                    <span>NEXIS</span>
+                </div>
+                <div class="user-profile">
+                    <div class="avatar" id="avatar-initials">AD</div>
+                    <div class="user-info">
+                        <h4 id="user-name">Administrador</h4>
+                        <span id="user-role">Suporte de TI</span>
+                    </div>
+                    <button id="logout-btn" title="Sair do Console" class="btn-icon">
+                        <i data-lucide="log-out"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Lista de Dispositivos -->
+            <div class="device-section">
+                <div class="section-title">
+                    <span>DISPOSITIVOS ({count})</span>
+                    <button class="btn-refresh" id="refresh-devices" title="Atualizar Lista">
+                        <i data-lucide="rotate-cw"></i>
+                    </button>
+                </div>
+                <div class="device-list" id="devices-list">
+                    <!-- Gerado dinamicamente -->
+                    <div class="loading-devices">
+                        <div class="spinner"></div>
+                        <span>Buscando aparelhos...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="connection-status">
+                    <span class="status-indicator online" id="server-status-dot"></span>
+                    <span id="server-status-text">Conectado ao Servidor</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ÁREA DE CONTEÚDO PRINCIPAL -->
+        <main class="main-content">
+            <!-- TELA DE BOAS-VINDAS (Quando nenhum aparelho está selecionado) -->
+            <section id="welcome-view" class="view-panel welcome-panel glass">
+                <div class="welcome-content">
+                    <div class="icon-wrap">
+                        <i data-lucide="monitor-smartphone" class="hero-icon"></i>
+                    </div>
+                    <h1>Console Nexis Remote Control</h1>
+                    <p>Selecione um dispositivo conectado na barra lateral para iniciar a sessão de controle remoto assistido, acessar sensores ou gerenciar aplicativos.</p>
+
+                    <div class="provisioning-info-grid">
+                        <div class="info-card glass">
+                            <h3><i data-lucide="qr-code"></i> Provisionamento Android</h3>
+                            <p>Para smartphones comerciais novos ou resetados:</p>
+                            <ol>
+                                <li>No Android Studio: <strong>Build Variants → provision</strong>, depois <strong>Build APK</strong>.</li>
+                                <li>Factory reset no celular → tela Welcome → toque 6 vezes.</li>
+                                <li>Escaneie o QR Code (confirme <strong>Pronto: SIM</strong> abaixo do QR).</li>
+                                <li>O aparelho instalará o agente e se conectará automaticamente.</li>
+                            </ol>
+                            <button class="btn-secondary" id="btn-show-qr"><i data-lucide="maximize"></i> Ver QR Code</button>
+                        </div>
+                        <div class="info-card glass">
+                            <h3><i data-lucide="barcode"></i> Coletores Zebra MC33xx</h3>
+                            <p>Para coletores corporativos industriais:</p>
+                            <ol>
+                                <li>Abra o aplicativo nativo <strong>StageNow</strong>.</li>
+                                <li>Escaneie o código de barras gerado pelo console Nexis.</li>
+                                <li>O coletor fará a instalação silenciosa e configurará as permissões via MX.</li>
+                            </ol>
+                            <button class="btn-secondary" id="btn-show-barcode"><i data-lucide="printer"></i> Ver Barcode StageNow</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TELA DE CONTROLE DE DISPOSITIVO (Ativa após selecionar um aparelho) -->
+            <section id="control-view" class="view-panel control-panel" style="display: none;">
+                <!-- Cabeçalho do Controle -->
+                <header class="control-header glass">
+                    <div class="active-device-title">
+                        <i data-lucide="smartphone" id="device-type-icon"></i>
+                        <div>
+                            <h2 id="active-device-name">Google Pixel 8</h2>
+                            <span id="active-device-id" class="badge">ID: pixel_8_demo</span>
+                        </div>
+                    </div>
+                    <div class="header-actions">
+                        <div class="session-timer">
+                            <i data-lucide="clock"></i>
+                            <span id="duration-timer">00:00:00</span>
+                        </div>
+                        <button class="btn-danger" id="btn-terminate-session">
+                            <i data-lucide="power"></i> Terminar Sessão
+                        </button>
+                    </div>
+                </header>
+
+                <div class="control-grid">
+                    <!-- PAINEL ESQUERDO: TELA DO SMARTPHONE -->
+                    <div class="phone-container-panel glass">
+                        <!-- Frame do Aparelho Físico -->
+                        <div class="phone-frame" id="phone-frame-container">
+                            <div class="phone-speaker"></div>
+                            
+                            <!-- Tela Interna do Smartphone -->
+                            <div class="phone-screen" id="phone-screen-touch">
+                                <!-- Vídeo WebRTC (Será alimentado pelo Stream Real) -->
+                                <video id="webrtc-video-player" autoplay playsinline style="display:none;"></video>
+
+                                <!-- Espelhamento de Tela Real (JPEG stream via WebSocket) -->
+                                <img id="real-screen-mirror-img" style="display:none; width: 100%; height: 100%; object-fit: fill; pointer-events: none; position: absolute; top: 0; left: 0; z-index: 3;" />
+
+                                <!-- Simulador Interativo Nexis (Caso esteja no modo mock ou stream desligado) -->
+                                <div class="simulator-os" id="mock-os-ui">
+                                    <div class="sim-status-bar">
+                                        <span id="sim-time">10:00</span>
+                                        <div class="sim-indicators">
+                                            <!-- Ponto Verde de Privacidade -->
+                                            <span class="privacy-dot mic" id="sim-mic-dot" style="display:none;"></span>
+                                            <span class="privacy-dot cam" id="sim-cam-dot" style="display:none;"></span>
+                                            <i data-lucide="wifi" class="sim-status-icon"></i>
+                                            <i data-lucide="battery" class="sim-status-icon"></i>
+                                        </div>
+                                    </div>
+
+                                    <!-- Home Screen Mock -->
+                                    <div class="sim-content" id="sim-screen-content">
+                                        <div class="sim-homescreen" id="sim-view-home">
+                                            <div class="widget-date">Terça, 26 de Maio</div>
+                                            <div class="sim-app-grid">
+                                                <div class="sim-app-icon" data-app="settings">
+                                                    <div class="app-icon-bg settings"><i data-lucide="settings"></i></div>
+                                                    <span>Configurações</span>
+                                                </div>
+                                                <div class="sim-app-icon" data-app="camera">
+                                                    <div class="app-icon-bg camera"><i data-lucide="camera"></i></div>
+                                                    <span>Câmera</span>
+                                                </div>
+                                                <div class="sim-app-icon" data-app="browser">
+                                                    <div class="app-icon-bg browser"><i data-lucide="chrome"></i></div>
+                                                    <span>Navegador</span>
+                                                </div>
+                                                <div class="sim-app-icon" data-app="nexis">
+                                                    <div class="app-icon-bg agent"><i data-lucide="shield"></i></div>
+                                                    <span>Agente Nexis</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- App Aberto: Configurações -->
+                                        <div class="sim-app-window" id="sim-view-settings" style="display: none;">
+                                            <div class="app-window-header">
+                                                <button class="btn-app-back"><i data-lucide="chevron-left"></i></button>
+                                                <span>Configurações do Sistema</span>
+                                            </div>
+                                            <div class="app-window-body">
+                                                <div class="settings-item">
+                                                    <i data-lucide="wifi"></i>
+                                                    <div><h4>Wi-Fi</h4><p>Conectado ao NexisCorp</p></div>
+                                                </div>
+                                                <div class="settings-item">
+                                                    <i data-lucide="bluetooth"></i>
+                                                    <div><h4>Bluetooth</h4><p>Ativado</p></div>
+                                                </div>
+                                                <div class="settings-item">
+                                                    <i data-lucide="accessibility"></i>
+                                                    <div><h4>Acessibilidade</h4><p>Nexis Agent: ATIVADO</p></div>
+                                                </div>
+                                                <div class="settings-item">
+                                                    <i data-lucide="info"></i>
+                                                    <div><h4>Sobre o Dispositivo</h4><p>Android 14 | Zebra MX 11.5</p></div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- App Aberto: Camera -->
+                                        <div class="sim-app-window" id="sim-view-camera" style="display: none;">
+                                            <div class="app-window-header">
+                                                <button class="btn-app-back"><i data-lucide="chevron-left"></i></button>
+                                                <span>Câmera Fotográfica</span>
+                                            </div>
+                                            <div class="app-window-body camera-app-view">
+                                                <i data-lucide="aperture" class="cam-icon"></i>
+                                                <p>Imagem da Câmera Traseira</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Barra de Navegação Física do Android -->
+                                    <div class="sim-nav-bar">
+                                        <button class="nav-btn" id="nav-btn-back"><i data-lucide="chevron-left"></i></button>
+                                        <button class="nav-btn" id="nav-btn-home"><i data-lucide="circle"></i></button>
+                                        <button class="nav-btn" id="nav-btn-recents"><i data-lucide="square"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wrapper para alinhar botões físicos e D-Pad lado a lado -->
+                        <div class="controls-row-wrapper">
+                            <!-- Controle Físico Inferior -->
+                            <div class="device-physical-buttons">
+                                <button class="btn-phys" id="phys-back" title="Voltar (Back)"><i data-lucide="corner-down-left"></i> Back</button>
+                                <button class="btn-phys" id="phys-home" title="Home"><i data-lucide="home"></i> Home</button>
+                                <button class="btn-phys" id="phys-recents" title="Recentes"><i data-lucide="layers"></i> Recents</button>
+                            </div>
+
+                            <!-- Direcional D-Pad para Gestos de Arrastar (Swipe) -->
+                            <div class="dpad-container">
+                                <div class="dpad">
+                                    <button class="dpad-btn up" id="dpad-up" title="Arrastar para Cima (Scroll Down)"><i data-lucide="chevron-up"></i></button>
+                                    <button class="dpad-btn left" id="dpad-left" title="Arrastar para a Esquerda"><i data-lucide="chevron-left"></i></button>
+                                    <div class="dpad-center"></div>
+                                    <button class="dpad-btn right" id="dpad-right" title="Arrastar para a Direita"><i data-lucide="chevron-right"></i></button>
+                                    <button class="dpad-btn down" id="dpad-down" title="Arrastar para Baixo (Scroll Up)"><i data-lucide="chevron-down"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PAINEL DIREITO: TELEMETRIA, INSTALADOR E MULTIMÍDIA -->
+                    <div class="control-details-panel">
+                        <!-- Abas de Navegação das Configurações -->
+                        <div class="tabs-header glass">
+                            <button class="tab-btn active" data-tab="telemetry"><i data-lucide="bar-chart-2"></i> Telemetria</button>
+                            <button class="tab-btn" data-tab="multimedia"><i data-lucide="map-pin"></i> Localização</button>
+                            <button class="tab-btn" data-tab="installer"><i data-lucide="download-cloud"></i> Apps (MDM)</button>
+                        </div>
+
+                        <!-- CONTEÚDO DAS ABAS -->
+                        <div class="tab-contents">
+                            <!-- ABA 1: TELEMETRIA -->
+                            <div class="tab-panel active" id="tab-telemetry">
+                                <div class="telemetry-grid">
+                                    <div class="stat-card glass">
+                                        <div class="stat-header">
+                                            <span>Bateria</span>
+                                            <i data-lucide="battery" class="battery-icon"></i>
+                                        </div>
+                                        <div class="stat-value" id="telemetry-battery">84%</div>
+                                        <div class="stat-progress">
+                                            <div class="progress-bar" id="battery-progress" style="width: 84%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="stat-card glass">
+                                        <div class="stat-header">
+                                            <span>Memória RAM</span>
+                                            <i data-lucide="cpu"></i>
+                                        </div>
+                                        <div class="stat-value" id="telemetry-ram">1.8 / 4.0 GB</div>
+                                        <div class="stat-desc">Uso saudável do sistema</div>
+                                    </div>
+                                </div>
+
+                                <div class="details-list glass">
+                                    <h3>Informações do Dispositivo</h3>
+                                    <div class="detail-row">
+                                        <span>Modelo:</span>
+                                        <strong id="info-model">Zebra MC3300x</strong>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Sistema Operacional:</span>
+                                        <strong id="info-os">Android 10.0 (API 29)</strong>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Permissão Device Owner:</span>
+                                        <strong class="text-success"><i data-lucide="check-circle-2"></i> Ativo</strong>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Zebra MX CSP:</span>
+                                        <strong id="info-zebra-status" class="text-success"><i data-lucide="check-circle-2"></i> Habilitado (v11.5)</strong>
+                                    </div>
+                                </div>
+
+                                <div class="action-card glass">
+                                    <h3>Ações Rápidas de Diagnóstico</h3>
+                                    <div class="action-buttons-flex">
+                                        <button class="btn-secondary btn-sm" id="btn-quick-screenshot"><i data-lucide="camera"></i> Screenshot</button>
+                                        <button class="btn-secondary btn-sm" id="btn-quick-toast"><i data-lucide="message-square"></i> Enviar Mensagem</button>
+                                        <button class="btn-secondary btn-sm" id="btn-quick-location-silent"><i data-lucide="map-pin"></i> Capturar GPS Agora</button>
+                                        <button class="btn-secondary btn-sm" id="btn-quick-lock"><i data-lucide="lock"></i> Bloquear Tela</button>
+                                        <button class="btn-secondary btn-sm" id="btn-quick-clear-pass"><i data-lucide="key-round"></i> Limpar Senha</button>
+                                        <button class="btn-secondary btn-sm text-danger" id="btn-quick-wipe"><i data-lucide="shield-alert"></i> Reset de Fábrica (Wipe)</button>
+                                    </div>
+
+                                </div>
+
+                                <div class="action-card glass" style="margin-top: 15px;">
+                                    <h3>Controle Remoto de Tela (Espelhamento)</h3>
+                                    <div class="action-buttons-flex">
+                                        <button class="btn-primary btn-sm" id="btn-start-mirror-silent"><i data-lucide="play-circle"></i> Iniciar Silencioso</button>
+                                        <button class="btn-secondary btn-sm" id="btn-start-mirror-prompt"><i data-lucide="user-check"></i> Iniciar com Confirmação</button>
+                                        <button class="btn-danger btn-sm" id="btn-stop-mirror"><i data-lucide="stop-circle"></i> Parar Espelhamento</button>
+                                    </div>
+                                    <!-- Monitoramento de Conectividade -->
+                                    <div class="monitoring-row">
+                                        <div class="monitoring-info">
+                                            <div class="monitoring-icon" id="monitoring-icon-wrap">
+                                                <i data-lucide="shield-off" id="monitoring-icon"></i>
+                                            </div>
+                                            <div>
+                                                <h4 class="monitoring-title">Celular em Monitoramento</h4>
+                                                <p class="monitoring-desc">Reativa GPS, Wi-Fi e Dados automaticamente se forem desligados</p>
+                                            </div>
+                                        </div>
+                                        <button class="btn-monitoring" id="btn-toggle-monitoring" data-active="false">
+                                            <i data-lucide="shield-off" id="btn-monitoring-icon"></i>
+                                            <span id="btn-monitoring-label">Sem monitoramento</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- LIVE LOGGER / MONITOR DE CONEXÃO E COMANDOS -->
+                                <div class="console-logs-panel glass" style="margin-top: 15px;">
+                                    <div class="logs-header">
+                                        <span><i data-lucide="terminal"></i> Monitor de Logs WebSocket</span>
+                                        <button class="btn-clear-logs" id="btn-clear-logs"><i data-lucide="trash-2"></i> Limpar</button>
+                                    </div>
+                                    <div class="logs-body" id="logs-container-stream">
+                                        <div class="log-line system">[SISTEMA] Console carregado. Aguardando inicialização...</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- ABA 2: LOCALIZAÇÃO EM TEMPO REAL (MAPS) -->
+                            <div class="tab-panel" id="tab-multimedia">
+                                <div class="location-container-card glass">
+                                    <div class="location-header-row">
+                                        <div>
+                                            <h3>Rastreamento Geográfico do Celular</h3>
+                                            <p class="description">Histórico de localização dos últimos 5 dias e posicionamento GPS/Rede em tempo real.</p>
+                                        </div>
+                                        <button class="btn-primary btn-sm" id="btn-request-location" title="Localizar o celular agora">
+                                            <i data-lucide="crosshair"></i> Localizar Agora
+                                        </button>
+                                    </div>
+
+                                    <!-- Grid de Localização: Mapa + Painel de Histórico -->
+                                    <div class="location-grid-layout">
+                                        <!-- Mapa -->
+                                        <div class="map-view-panel glass" id="location-map">
+                                            <div class="map-loading-overlay" id="map-loading">
+                                                <div class="spinner"></div>
+                                                <span>Inicializando mapa...</span>
+                                            </div>
+                                        </div>
+
+                                        <!-- Histórico Lateral -->
+                                        <div class="location-history-panel glass">
+                                            <h4>Histórico (Últimos 5 Dias)</h4>
+                                            <div class="history-points-list" id="location-history-items">
+                                                <div class="empty-history">
+                                                    <i data-lucide="history"></i>
+                                                    <span>Aguardando conexão com o dispositivo...</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- ABA 3: INSTALADOR DE APPS (MDM SILENT INSTALL) -->
+                            <div class="tab-panel" id="tab-installer">
+                                <div class="installer-card glass">
+                                    <h3>Gerenciador de Aplicativos Corporativos</h3>
+                                    <p class="description">Faça upload de APKs e envie ordens de instalação. Se o app estiver como Device Owner ou no StageNow, a instalação é silenciosa.</p>
+
+                                    <!-- Formulário de Upload de APK -->
+                                    <div class="upload-apk-box glass">
+                                        <h4>Upload de Novo APK (.apk)</h4>
+                                        <form id="upload-apk-form">
+                                            <div class="file-drop-area" id="file-drop-area">
+                                                <i data-lucide="upload-cloud"></i>
+                                                <span class="file-msg">Arraste o arquivo APK ou clique para selecionar</span>
+                                                <input type="file" id="apk-file-input" accept=".apk" style="display: none;">
+                                            </div>
+                                            <button type="submit" class="btn-primary btn-sm" id="btn-upload-apk" disabled>
+                                                <i data-lucide="upload"></i> Upload de APK
+                                            </button>
+                                        </form>
+                                    </div>
+
+                                    <!-- Lista de APKs salvos no Servidor -->
+                                    <div class="apk-list-container">
+                                        <h4>APKs Disponíveis para Instalação</h4>
+                                        <div class="apk-list" id="apk-files-list">
+                                            <div class="empty-apks">Nenhum APK hospedado no servidor.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL: QR CODE DE PROVISIONAMENTO -->
+    <div id="qr-modal" class="modal-wrapper" style="display: none;">
+        <div class="modal-card glass">
+            <div class="modal-header">
+                <h2>QR Code de Provisionamento Device Owner</h2>
+                <button class="btn-close-modal" id="btn-close-qr"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body text-center">
+                <p>Efetue o Reset de Fábrica no celular. Na tela de boas-vindas, toque 6 vezes e escaneie o código. Antes disso, gere o APK com variant <strong>provision</strong> no Android Studio.</p>
+                <div class="qr-code-placeholder">
+                    <!-- Gerado dinamicamente via JS utilizando a API pública qrserver -->
+                    <img id="qr-code-image" style="width: 100%; height: 100%; object-fit: contain;" alt="Carregando QR Code..." />
+                </div>
+                <div class="qr-details glass">
+                    <strong>Configuração embutida:</strong>
+                    <pre id="qr-code-details">Carregando configuração de DPC...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: BARCODE STAGENOW ZEBRA -->
+    <div id="barcode-modal" class="modal-wrapper" style="display: none;">
+        <div class="modal-card glass">
+            <div class="modal-header">
+                <h2>Código de Barras StageNow para Zebra MC33xx</h2>
+                <button class="btn-close-modal" id="btn-close-barcode"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body text-center">
+                <p>Abra o utilitário <strong>StageNow</strong> instalado de fábrica no coletor Zebra MC33xx e escaneie o código abaixo para configurar e instalar o Nexis Agent automaticamente:</p>
+                <div class="barcode-placeholder">
+                    <!-- Código de Barras representativo do PDF417 do StageNow -->
+                    <div class="simulated-pdf417">
+                        <div class="barcode-line"></div>
+                        <div class="barcode-line"></div>
+                        <div class="barcode-line"></div>
+                    </div>
+                </div>
+                <div class="barcode-details glass">
+                    <strong>Ações Automatizadas:</strong>
+                    <ul>
+                        <li>Download Silencioso do APK Nexis Agent</li>
+                        <li>Configuração de Permissão de Acessibilidade Automática</li>
+                        <li>Concessão silenciosa de permissão de gravação e mídia via Zebra MX</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
