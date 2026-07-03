@@ -94,7 +94,8 @@ class RemoteControlService : Service() {
     private var isContinuousLocationActive = false
     private var lastLocationSentMs = 0L
     private var lastMobileDataRestoreMs = 0L
-    private val LOCATION_MIN_INTERVAL_MS = 300_000L // 5 min entre envios automaticos
+    private var locationMinIntervalMs = 300_000L // 5 min entre envios automaticos
+    private var locationMinDistanceM = 50f       // 50m minimo
     private val LOCATION_ON_DEMAND_MIN_MS = 30_000L  // 30s entre pedidos sob demanda
     private val MOBILE_DATA_RESTORE_COOLDOWN_MS = 60_000L
 
@@ -343,6 +344,12 @@ class RemoteControlService : Service() {
                     Log.i(TAG, "Comando de requisição de localização recebido.")
                     requestSingleLocation()
                 }
+                "set_location_interval" -> {
+                    val interval = data.optLong("interval", 300000L)
+                    val distance = data.optDouble("distance", 50.0).toFloat()
+                    Log.i(TAG, "Comando de alteração de intervalo de localização recebido: interval=$interval, distance=$distance")
+                    updateLocationInterval(interval, distance)
+                }
                 "toast" -> {
                     val message = data.optString("message")
                     Log.i(TAG, "Comando de Toast recebido: $message")
@@ -543,13 +550,13 @@ class RemoteControlService : Service() {
             if (locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true) {
                 locationManager?.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
-                    LOCATION_MIN_INTERVAL_MS,
-                    100f,
+                    locationMinIntervalMs,
+                    locationMinDistanceM,
                     ensureLocationListener()
                 )
                 isContinuousLocationActive = true
-                Log.i(TAG, "Rastreamento continuo iniciado (monitoramento ativo, GPS 5 min).")
-                sendDeviceLog("info", "Rastreamento continuo iniciado (monitoramento ativo).")
+                Log.i(TAG, "Rastreamento continuo iniciado (monitoramento ativo, GPS ${locationMinIntervalMs/1000}s).")
+                sendDeviceLog("info", "Rastreamento continuo iniciado (monitoramento ativo, ${locationMinIntervalMs/1000}s).")
             } else {
                 sendDeviceLog("warn", "GPS desativado. Rastreamento continuo aguardando GPS.")
             }
@@ -569,6 +576,42 @@ class RemoteControlService : Service() {
         }
         isContinuousLocationActive = false
         Log.i(TAG, "Rastreamento continuo parado.")
+    }
+
+    private fun updateLocationInterval(interval: Long, distance: Float) {
+        locationMinIntervalMs = interval
+        locationMinDistanceM = distance
+
+        if (!hasLocationPermission()) {
+            sendDeviceLog("error", "Sem permissão de localização para atualizar intervalo.")
+            return
+        }
+
+        try {
+            if (isContinuousLocationActive) {
+                // Se o rastreamento em segundo plano estiver ativo, reinicia com os novos tempos
+                locationListener?.let { locationManager?.removeUpdates(it) }
+                isContinuousLocationActive = false
+                startContinuousLocationTracking()
+            } else {
+                // Caso contrário (está parado), apenas re-inscreve com as novas configurações caso GPS esteja ativado
+                locationListener?.let { locationManager?.removeUpdates(it) }
+                if (locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true) {
+                    locationManager?.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER,
+                        locationMinIntervalMs,
+                        locationMinDistanceM,
+                        ensureLocationListener()
+                    )
+                    isContinuousLocationActive = true
+                }
+            }
+            sendDeviceLog("info", "Intervalo de rastreamento de GPS atualizado: ${interval/1000}s / ${distance}m")
+            Log.i(TAG, "Intervalo de rastreamento de GPS atualizado com sucesso: interval=$interval, distance=$distance")
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao atualizar intervalo de rastreamento: ${e.message}")
+            sendDeviceLog("error", "Erro ao atualizar intervalo de rastreamento: ${e.message}")
+        }
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -643,7 +686,7 @@ class RemoteControlService : Service() {
 
     private fun sendLocationUpdateThrottled(location: Location, force: Boolean) {
         val now = System.currentTimeMillis()
-        val minInterval = if (force) LOCATION_ON_DEMAND_MIN_MS else LOCATION_MIN_INTERVAL_MS
+        val minInterval = if (force) LOCATION_ON_DEMAND_MIN_MS else locationMinIntervalMs
         if (!force && now - lastLocationSentMs < minInterval) {
             return
         }

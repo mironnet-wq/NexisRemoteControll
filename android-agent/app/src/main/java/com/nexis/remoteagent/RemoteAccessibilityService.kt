@@ -6,6 +6,8 @@ import android.graphics.Path
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.os.Handler
+import android.os.Looper
 
 class RemoteAccessibilityService : AccessibilityService() {
 
@@ -18,6 +20,12 @@ class RemoteAccessibilityService : AccessibilityService() {
             
         // Controla se deve auto-aceitar o prompt de captura de tela
         var autoClickMediaProjection = false
+            set(value) {
+                field = value
+                if (value) {
+                    instance?.startActiveCheckLoop()
+                }
+            }
 
         // Controla se deve auto-ativar os dados móveis nas configurações
         var autoEnableMobileData = false
@@ -31,8 +39,106 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         instance = null
+        checkLoopRunnable?.let { checkLoopHandler?.removeCallbacks(it) }
         Log.i(TAG, "Serviço de Acessibilidade Nexis Desvinculado")
         return super.onUnbind(intent)
+    }
+
+    private var checkLoopHandler: Handler? = null
+    private var checkLoopRunnable: Runnable? = null
+    private var checkLoopCounter = 0
+
+    fun startActiveCheckLoop() {
+        Log.i(TAG, "Iniciando loop ativo de busca pelo prompt de MediaProjection...")
+        if (checkLoopHandler == null) {
+            checkLoopHandler = Handler(Looper.getMainLooper())
+        }
+        
+        checkLoopRunnable?.let { checkLoopHandler?.removeCallbacks(it) }
+        checkLoopCounter = 0
+        
+        checkLoopRunnable = object : Runnable {
+            override fun run() {
+                if (!autoClickMediaProjection) {
+                    Log.d(TAG, "Loop ativo encerrado: autoClickMediaProjection é false.")
+                    return
+                }
+                
+                checkLoopCounter++
+                if (checkLoopCounter > 30) { // Tenta por 15 segundos (30 * 500ms)
+                    Log.w(TAG, "Loop ativo encerrado por timeout de 15s sem encontrar o prompt.")
+                    autoClickMediaProjection = false
+                    return
+                }
+                
+                val clicked = checkAndClickMediaProjectionPrompt()
+                if (clicked) {
+                    Log.i(TAG, "Prompt encontrado e clicado com sucesso no loop ativo (tentativa $checkLoopCounter).")
+                    autoClickMediaProjection = false
+                } else {
+                    checkLoopHandler?.postDelayed(this, 500L)
+                }
+            }
+        }
+        checkLoopHandler?.post(checkLoopRunnable!!)
+    }
+
+    private fun checkAndClickMediaProjectionPrompt(): Boolean {
+        val nodesToSearch = mutableListOf<android.view.accessibility.AccessibilityNodeInfo>()
+        
+        val activeRoot = rootInActiveWindow
+        if (activeRoot != null) {
+            nodesToSearch.add(activeRoot)
+        }
+        
+        val windowsList = windows
+        if (windowsList != null) {
+            for (window in windowsList) {
+                val root = window.root
+                if (root != null && root != activeRoot) {
+                    nodesToSearch.add(root)
+                }
+            }
+        }
+        
+        if (nodesToSearch.isEmpty()) return false
+        
+        val acceptTexts = listOf(
+            "Iniciar agora", 
+            "Iniciar", 
+            "Start now", 
+            "Start", 
+            "Permitir", 
+            "Allow"
+        )
+        
+        for (rootNode in nodesToSearch) {
+            for (text in acceptTexts) {
+                val nodes = rootNode.findAccessibilityNodeInfosByText(text)
+                if (nodes != null && nodes.isNotEmpty()) {
+                    for (node in nodes) {
+                        if (node.isClickable) {
+                            if (node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
+                                Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no nó: '${node.text}')")
+                                return true
+                            }
+                        } else {
+                            var parent = node.parent
+                            while (parent != null) {
+                                if (parent.isClickable) {
+                                    if (parent.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
+                                        Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no pai de: '${node.text}')")
+                                        return true
+                                    }
+                                }
+                                parent = parent.parent
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

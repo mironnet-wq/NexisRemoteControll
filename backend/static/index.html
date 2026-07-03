@@ -401,9 +401,20 @@
                                             <h3>Rastreamento Geográfico do Celular</h3>
                                             <p class="description">Histórico de localização dos últimos 5 dias e posicionamento GPS/Rede em tempo real.</p>
                                         </div>
-                                        <button class="btn-primary btn-sm" id="btn-request-location" title="Localizar o celular agora">
-                                            <i data-lucide="crosshair"></i> Localizar Agora
-                                        </button>
+                                        <div style="display: flex; gap: 10px; align-items: center;">
+                                            <div class="interval-selector-container" style="display: flex; align-items: center; gap: 5px; background: rgba(30, 41, 59, 0.5); padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                                                <label for="select-gps-interval" style="font-size: 12px; color: #94a3b8; white-space: nowrap; margin-bottom: 0;"><i data-lucide="clock" style="width: 14px; height: 14px; display: inline; vertical-align: middle; margin-right: 2px;"></i> Intervalo:</label>
+                                                <select id="select-gps-interval" style="background: transparent; border: none; color: #fff; font-size: 12px; cursor: pointer; outline: none; padding-right: 15px;">
+                                                    <option value="300000-50" style="background: #1e293b;">Normal (5 min / 50m)</option>
+                                                    <option value="60000-10" style="background: #1e293b;">Rápido (1 min / 10m)</option>
+                                                    <option value="10000-2" style="background: #1e293b;">Tempo Real (10s / 2m)</option>
+                                                    <option value="1800000-200" style="background: #1e293b;">Econômico (30 min / 200m)</option>
+                                                </select>
+                                            </div>
+                                            <button class="btn-primary btn-sm" id="btn-request-location" title="Localizar o celular agora">
+                                                <i data-lucide="crosshair"></i> Localizar Agora
+                                            </button>
+                                        </div>
                                     </div>
 
                                     <!-- Grid de Localização: Mapa + Painel de Histórico -->

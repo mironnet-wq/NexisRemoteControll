@@ -820,11 +820,32 @@ document.addEventListener("DOMContentLoaded", () => {
         // Criar o mapa Leaflet centrado no Brasil por padrão
         leafletMap = L.map("location-map").setView([-15.7801, -47.9292], 4);
 
-        // Adicionar camada padrão do OpenStreetMap (tema claro)
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        // Definir camadas de mapa base
+        const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
             maxZoom: 19,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(leafletMap);
+        });
+
+        const dark = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+            maxZoom: 20,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        });
+
+        const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+            maxZoom: 19,
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        });
+
+        // Adicionar a camada escura premium como padrão
+        dark.addTo(leafletMap);
+
+        // Adicionar controle de camadas no canto superior direito
+        const baseMaps = {
+            "Escuro (CartoDB)": dark,
+            "Padrão (OSM)": osm,
+            "Satélite (Esri)": satellite
+        };
+        L.control.layers(baseMaps).addTo(leafletMap);
     }
 
     function clearMapAndHistory() {
@@ -1037,6 +1058,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 lucide.createIcons();
             }
             sendCommand("request_location");
+        });
+    }
+
+    // Vincular alteração no seletor de intervalo de GPS
+    const selectGpsInterval = document.getElementById("select-gps-interval");
+    if (selectGpsInterval) {
+        selectGpsInterval.addEventListener("change", (e) => {
+            const val = e.target.value;
+            const parts = val.split("-");
+            if (parts.length === 2) {
+                const interval = parseInt(parts[0]);
+                const distance = parseFloat(parts[1]);
+                logMessage(`[MAPA] Alterando intervalo de GPS remoto: ${interval / 1000}s / ${distance}m...`, "sent");
+                sendCommand("set_location_interval", {
+                    interval: interval,
+                    distance: distance
+                });
+            }
         });
     }
 

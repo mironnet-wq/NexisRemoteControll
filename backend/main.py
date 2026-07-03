@@ -632,7 +632,7 @@ async def websocket_client(websocket: WebSocket, client_id: str):
                 })
                 
             # Comandos Administrativos (DPC e Toast) e Localizacao
-            elif msg_type in ["lock_device", "clear_password", "wipe_device", "toast", "start_mirroring", "stop_mirroring", "request_location", "start_monitoring", "stop_monitoring"]:
+            elif msg_type in ["lock_device", "clear_password", "wipe_device", "toast", "start_mirroring", "stop_mirroring", "request_location", "start_monitoring", "stop_monitoring", "set_location_interval"]:
                 logger.info(f"Comando corporativo/localizacao enviado para {target_device}: {data}")
                 
                 # Simulação para dispositivos de demonstração (demo)
