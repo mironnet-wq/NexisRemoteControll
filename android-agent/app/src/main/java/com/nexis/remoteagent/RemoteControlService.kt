@@ -62,14 +62,20 @@ class RemoteControlService : Service() {
         private const val NOTIFICATION_ID = 8821
         private const val CHANNEL_ID = "NexisControlChannel"
         
-        // Configurações de Conexão (Substituir com IP do servidor real)
-        private const val SERVER_HOST = "172.16.0.100:6061"
+        // Configurações de Conexão (Tenta IP interno de teste e endereço externo)
+        private val SERVER_URLS = listOf(
+            "ws://10.70.100.251:6061",
+            "wss://mdm.biltextil.com.br",
+            "ws://mdm.biltextil.com.br:6061",
+            "ws://mdm.biltextil.com.br"
+        )
     }
 
     private var client: OkHttpClient? = null
     private var webSocket: WebSocket? = null
     private var deviceId: String = ""
     private var reconnectDelayMs = 5000L
+    private var currentUrlIndex = 0
     private var telemetryHandler: Handler? = null
     private var telemetryRunnable: Runnable? = null
     private lateinit var packageInstallHelper: PackageInstallHelper
@@ -230,17 +236,20 @@ class RemoteControlService : Service() {
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
 
+        val baseUrl = SERVER_URLS[currentUrlIndex]
+        Log.i(TAG, "Tentando conectar ao servidor WebSocket: $baseUrl")
+
         val request = Request.Builder()
-            .url("ws://$SERVER_HOST/ws/device/$deviceId")
+            .url("$baseUrl/ws/device/$deviceId")
             .build()
 
         webSocket = client?.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "Conectado ao servidor de suporte Nexis.")
+                Log.i(TAG, "Conectado ao servidor de suporte Nexis via $baseUrl.")
                 this@RemoteControlService.webSocket = webSocket
                 reconnectDelayMs = 5000L // Resetar delay após conectar
                 sendTelemetry()
-                sendDeviceLog("info", "Conectado ao suporte com sucesso.")
+                sendDeviceLog("info", "Conectado ao suporte com sucesso via $baseUrl.")
                 lastPolicySummary?.let { summary ->
                     sendDeviceLog("info", "[POLICY] $summary")
                 }
@@ -263,9 +272,15 @@ class RemoteControlService : Service() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Falha na conexão com o servidor WebSocket: ${t.message}. Reconectando em ${reconnectDelayMs/1000}s...", t)
+                Log.e(TAG, "Falha na conexão com o servidor em $baseUrl: ${t.message}. Rotacionando...")
                 this@RemoteControlService.webSocket = null
                 lastServerMessageMs.set(0L)
+                
+                // Rotaciona a URL para tentar a próxima
+                currentUrlIndex = (currentUrlIndex + 1) % SERVER_URLS.size
+                val nextUrl = SERVER_URLS[currentUrlIndex]
+                Log.i(TAG, "Próxima tentativa será em: $nextUrl")
+                
                 val currentDelay = reconnectDelayMs
                 
                 // Reconexão imediata via Handler
@@ -288,9 +303,12 @@ class RemoteControlService : Service() {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.w(TAG, "Conexão fechada: $reason")
+                Log.w(TAG, "Conexão fechada: $reason. Rotacionando...")
                 this@RemoteControlService.webSocket = null
                 lastServerMessageMs.set(0L)
+                
+                // Rotaciona a URL
+                currentUrlIndex = (currentUrlIndex + 1) % SERVER_URLS.size
                 
                 // Se fechada inesperadamente, agendar alarme de reconexão rápido
                 scheduleNextReconnectAlarm(5000L)
@@ -338,7 +356,11 @@ class RemoteControlService : Service() {
                 }
                 "install_app" -> {
                     val apkUrl = obj.optString("url")
-                    downloadAndInstallApk("http://$SERVER_HOST$apkUrl", targetClient)
+                    val currentBaseUrl = SERVER_URLS[currentUrlIndex]
+                    val httpBaseUrl = currentBaseUrl
+                        .replace("wss://", "https://")
+                        .replace("ws://", "http://")
+                    downloadAndInstallApk("$httpBaseUrl$apkUrl", targetClient)
                 }
                 "request_location" -> {
                     Log.i(TAG, "Comando de requisição de localização recebido.")

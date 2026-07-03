@@ -128,7 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- GERADOR DE QR CODE DINÂMICO (PROVISIONAMENTO DPC) ---
     const qrCodeImage = document.getElementById("qr-code-image");
-    const DEFAULT_SERVER_HOST = "172.16.0.100:6061";
+    const DEFAULT_SERVER_HOST = "10.70.100.251:6061";
 
     async function updateDpcProvisioningQR() {
         const serverHost = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")

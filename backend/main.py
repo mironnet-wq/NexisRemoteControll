@@ -32,7 +32,7 @@ os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # Host padrão do servidor (IP:porta) — usado no QR de provisionamento e fallbacks
-DEFAULT_SERVER_HOST = os.getenv("NEXIS_SERVER_HOST", "172.16.0.100:6061")
+DEFAULT_SERVER_HOST = os.getenv("NEXIS_SERVER_HOST", "10.70.100.251:6061")
 
 # Configurações de Segurança
 SECRET_KEY = "nexis_super_secure_development_secret_key"
