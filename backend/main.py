@@ -378,8 +378,8 @@ async def get_dpc_info(host: Optional[str] = None):
         )
 
     checksum = get_apk_signature_checksum(apk_path)
-    # Usar URL externa segura do GitHub para download público via HTTPS
-    download_url = "https://github.com/mironnet-wq/NexisRemoteControll/releases/download/v1.0.0/app-debug.apk"
+    # Usar link direto raw do GitHub (200 OK sem 302 redirect) para evitar falhas de provisionamento
+    download_url = "https://raw.githubusercontent.com/mironnet-wq/NexisRemoteControll/main/backend/apks/app-debug.apk"
 
     dpc_payload = {
         "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.nexis.remoteagent/com.nexis.remoteagent.DeviceAdminReceiver",
