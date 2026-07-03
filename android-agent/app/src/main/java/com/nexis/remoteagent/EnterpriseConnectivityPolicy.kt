@@ -74,6 +74,8 @@ object EnterpriseConnectivityPolicy {
             applyUserRestrictions(dpm, admin, applied, skipped, failed)
             // Remove restriction que bloqueia tela de localizacao em devices ja provisionados
             clearRestrictionIfSet(dpm, admin, UserManager.DISALLOW_SHARE_LOCATION, skipped)
+            // Limpa restriction de configuracao de wi-fi para permitir trocar de rede, mantendo o wi-fi ativo
+            clearRestrictionIfSet(dpm, admin, UserManager.DISALLOW_CONFIG_WIFI, skipped)
         } else {
             skipped.add("user_restrictions_require_device_owner")
             Log.i(TAG, "User Restrictions ignoradas: requer Device Owner.")
@@ -176,7 +178,6 @@ object EnterpriseConnectivityPolicy {
     ) {
         val restrictions = mutableListOf(
             UserManager.DISALLOW_CHANGE_WIFI_STATE,
-            UserManager.DISALLOW_CONFIG_WIFI,
             UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS
         )
 

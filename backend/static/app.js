@@ -135,13 +135,16 @@ document.addEventListener("DOMContentLoaded", () => {
             ? DEFAULT_SERVER_HOST
             : `${window.location.hostname}:${window.location.port || 6061}`;
             
+        const chkUsePackageHash = document.getElementById("chk-use-package-hash");
+        const usePackageHash = chkUsePackageHash ? chkUsePackageHash.checked : false;
+
         try {
             if (qrCodeDetails) {
                 qrCodeDetails.textContent = "Carregando configuração do servidor...";
             }
             
-            // Fazer requisição para buscar a configuração atual e o checksum da assinatura do APK
-            const response = await fetch(`/api/dpc-info?host=${serverHost}`);
+            // Fazer requisição para buscar a configuração atual e o checksum do APK (assinatura ou arquivo)
+            const response = await fetch(`/api/dpc-info?host=${serverHost}&use_package_hash=${usePackageHash}`);
             if (!response.ok) {
                 throw new Error("Falha ao obter dados de DPC do servidor");
             }
@@ -155,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (meta) {
                     details += "\n\n--- Status ---\n";
                     details += `APK: ${meta.apk_name} (${(meta.apk_size_bytes / 1024 / 1024).toFixed(2)} MB)\n`;
+                    details += `Tipo de Checksum: ${meta.checksum_type === 'file_hash' ? 'SHA-256 do Arquivo APK' : 'SHA-256 da Assinatura'}\n`;
                     details += `Checksum: ${meta.checksum_present ? meta.checksum : "AUSENTE - provisionamento vai falhar"}\n`;
                     details += `Pronto: ${meta.ready ? "SIM" : "NAO"}\n`;
                     if (!meta.ready) {
@@ -170,7 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             
             logMessage(meta?.ready
-                ? "[DPC] QR Code pronto para provisionamento."
+                ? `[DPC] QR Code pronto para provisionamento (${meta.checksum_type === 'file_hash' ? 'Hash do Arquivo' : 'Hash da Assinatura'}).`
                 : "[DPC] ATENCAO: checksum ausente — gere o APK 'provision' antes de escanear.", meta?.ready ? "info" : "error");
         } catch (e) {
             console.error("Erro ao atualizar QR Code DPC:", e);
@@ -187,6 +191,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=20&data=${qrDataFallback}`;
             }
         }
+    }
+
+    // Configurar listener para mudança no tipo de checksum
+    const chkUsePackageHash = document.getElementById("chk-use-package-hash");
+    if (chkUsePackageHash) {
+        chkUsePackageHash.addEventListener("change", () => {
+            updateDpcProvisioningQR();
+        });
     }
 
     // Inicializar na carga inicial

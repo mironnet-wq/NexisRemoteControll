@@ -279,6 +279,21 @@ def get_apk_signature_checksum(apk_path: str) -> Optional[str]:
         
     return checksum
 
+def get_apk_file_checksum(apk_path: str) -> Optional[str]:
+    if not os.path.exists(apk_path):
+        return None
+    try:
+        import hashlib
+        with open(apk_path, "rb") as f:
+            data = f.read()
+            sha256_bytes = hashlib.sha256(data).digest()
+            checksum = base64.urlsafe_b64encode(sha256_bytes).decode('utf-8').rstrip('=')
+            logger.info(f"Checksum de arquivo gerado com sucesso para {apk_path}: {checksum}")
+            return checksum
+    except Exception as e:
+        logger.error(f"Erro ao calcular checksum do arquivo APK {apk_path}: {e}")
+        return None
+
 # Funções Auxiliares de Segurança
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -362,7 +377,7 @@ async def list_apks(current_user: dict = Depends(get_current_user)):
     return apks
 
 @app.get("/api/dpc-info")
-async def get_dpc_info(host: Optional[str] = None):
+async def get_dpc_info(host: Optional[str] = None, use_package_hash: bool = False):
     apk_path = os.path.join(APKS_DIR, "app-debug.apk")
 
     if not os.path.exists(apk_path) and os.path.exists(APKS_DIR):
@@ -377,8 +392,7 @@ async def get_dpc_info(host: Optional[str] = None):
             detail="APK nao encontrado em backend/apks/. No Android Studio: Build > Select Build Variant > provision, depois Build > Build APK(s)."
         )
 
-    checksum = get_apk_signature_checksum(apk_path)
-    # Usar link direto raw do GitHub (200 OK sem 302 redirect) para evitar falhas de provisionamento
+    # Usar o link direto raw do GitHub (200 OK sem 302 redirect) para evitar falhas de download no Samsung Knox
     download_url = "https://raw.githubusercontent.com/mironnet-wq/NexisRemoteControll/main/backend/apks/app-debug.apk"
 
     dpc_payload = {
@@ -387,10 +401,18 @@ async def get_dpc_info(host: Optional[str] = None):
         "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": True
     }
 
-    if checksum:
-        dpc_payload["android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM"] = checksum
+    if use_package_hash:
+        checksum = get_apk_file_checksum(apk_path)
+        if checksum:
+            dpc_payload["android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM"] = checksum
+        else:
+            logger.warning("Checksum de arquivo do APK ausente.")
     else:
-        logger.warning("Checksum da assinatura ausente. O provisionamento pode falhar no celular.")
+        checksum = get_apk_signature_checksum(apk_path)
+        if checksum:
+            dpc_payload["android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM"] = checksum
+        else:
+            logger.warning("Checksum da assinatura ausente. O provisionamento pode falhar no celular.")
 
     return {
         "provisioning": dpc_payload,
@@ -399,6 +421,7 @@ async def get_dpc_info(host: Optional[str] = None):
             "apk_size_bytes": os.path.getsize(apk_path),
             "checksum_present": checksum is not None,
             "checksum": checksum,
+            "checksum_type": "file_hash" if use_package_hash else "signature_hash",
             "download_url": download_url,
             "ready": checksum is not None,
         }
