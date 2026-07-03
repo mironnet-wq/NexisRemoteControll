@@ -182,7 +182,16 @@ manager = ConnectionManager()
 APK_SIGNATURE_CACHE = {}
 
 def find_tools():
-    # 1. Procurar build-tools do Android SDK
+    # 0. Tenta encontrar no PATH do sistema primeiro
+    apksigner_in_path = shutil.which("apksigner")
+    if apksigner_in_path:
+        return "apksigner", apksigner_in_path
+        
+    keytool_in_path = shutil.which("keytool")
+    if keytool_in_path:
+        return "keytool", keytool_in_path
+
+    # 1. Procurar build-tools do Android SDK nos caminhos padroes
     local_appdata = os.environ.get("LOCALAPPDATA", "")
     sdk_paths = []
     if local_appdata:
@@ -198,6 +207,7 @@ def find_tools():
     # 2. Procurar keytool nos JDKs instalados
     jdk_paths = [
         r"C:\Program Files\Java\jdk*\bin\keytool.exe",
+        r"C:\Program Files\Microsoft\jdk*\bin\keytool.exe",
         r"C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe",
         r"C:\Program Files\Android\Android Studio\jre\bin\keytool.exe",
         r"C:\Program Files\Android\Android Studio\jre\jre\bin\keytool.exe"
