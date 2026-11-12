@@ -2,8 +2,10 @@ package com.nexis.remoteagent
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.graphics.Path
 import android.os.Build
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
+import android.graphics.Path
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.os.Handler
@@ -102,39 +104,142 @@ class RemoteAccessibilityService : AccessibilityService() {
         }
         
         if (nodesToSearch.isEmpty()) return false
-        
-        val acceptTexts = listOf(
-            "Iniciar agora", 
-            "Iniciar", 
-            "Start now", 
-            "Start", 
-            "Permitir", 
-            "Allow"
+
+        // Android 14: só confirma depois de "tela inteira" ficar selecionada.
+        if (!prepareEntireScreen(nodesToSearch)) return false
+        if (clickProjectionStart(nodesToSearch)) return true
+        return clickSystemStart(nodesToSearch)
+    }
+
+    private val singleAppLabels = listOf(
+        "Compartilhar um app", "Um único app", "Um app", "Um aplicativo", "Compartilhar um aplicativo",
+        "A single app", "Single app", "Share one app", "One app"
+    )
+
+    private val entireScreenLabels = listOf(
+        "Compartilhar a tela inteira", "A tela inteira", "Tela inteira", "Share entire screen", "Entire screen"
+    )
+
+    private fun nodesWith(roots: List<AccessibilityNodeInfo>, labels: List<String>): List<AccessibilityNodeInfo> {
+        val out = mutableListOf<AccessibilityNodeInfo>()
+        for (root in roots) {
+            for (label in labels) {
+                val found = root.findAccessibilityNodeInfosByText(label) ?: continue
+                for (node in found) {
+                    val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
+                    if (text.contains(label, ignoreCase = true) && out.none { it == node }) out.add(node)
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * A janela de captura do Android 14 tem um seletor "um app" / "tela inteira".
+     * Com "um app" selecionado, "Iniciar" abre uma segunda tela de escolha de app e a
+     * captura fica sem imagem. Aqui: lista aberta → escolhe "tela inteira"; seletor em
+     * "um app" → abre a lista. Só devolve true quando pode clicar em Iniciar.
+     */
+    private fun prepareEntireScreen(roots: List<AccessibilityNodeInfo>): Boolean {
+        val single = nodesWith(roots, singleAppLabels)
+        val entire = nodesWith(roots, entireScreenLabels)
+        if (single.isNotEmpty() && entire.isNotEmpty()) {
+            // Lista aberta: as duas opções aparecem juntas.
+            for (node in entire) if (clickNode(node)) {
+                Log.i(TAG, "Captura: opção tela inteira escolhida.")
+                return false
+            }
+            return false
+        }
+        if (single.isNotEmpty()) {
+            for (node in single) if (clickNode(node)) {
+                Log.i(TAG, "Captura: abrindo o seletor para trocar 'um app' por 'tela inteira'.")
+                return false
+            }
+            return false
+        }
+        return true
+    }
+
+    private fun chooseEntireScreen(roots: List<AccessibilityNodeInfo>): Boolean {
+        val labels = listOf(
+            "Compartilhar a tela inteira",
+            "Share entire screen",
+            "Tela inteira",
+            "Entire screen",
+            "A tela inteira"
         )
-        
-        for (rootNode in nodesToSearch) {
-            for (text in acceptTexts) {
-                val nodes = rootNode.findAccessibilityNodeInfosByText(text)
-                if (nodes != null && nodes.isNotEmpty()) {
-                    for (node in nodes) {
-                        if (node.isClickable) {
-                            if (node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
-                                Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no nó: '${node.text}')")
-                                return true
-                            }
-                        } else {
-                            var parent = node.parent
-                            while (parent != null) {
-                                if (parent.isClickable) {
-                                    if (parent.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
-                                        Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no pai de: '${node.text}')")
-                                        return true
-                                    }
-                                }
-                                parent = parent.parent
-                            }
-                        }
+        for (root in roots) {
+            for (label in labels) {
+                val nodes = root.findAccessibilityNodeInfosByText(label) ?: continue
+                for (node in nodes) {
+                    val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
+                    if (!text.contains(label, ignoreCase = true)) continue
+                    if (clickNode(node)) {
+                        Log.i(TAG, "Tela inteira escolhida: '$text'")
+                        return true
                     }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun clickProjectionStart(roots: List<AccessibilityNodeInfo>): Boolean {
+        val labels = listOf(
+            "Iniciar agora",
+            "Começar agora",
+            "Start now",
+            "Começar",
+            "Iniciar",
+            "Start"
+        )
+        for (root in roots) {
+            for (label in labels) {
+                val nodes = root.findAccessibilityNodeInfosByText(label) ?: continue
+                for (node in nodes) {
+                    val text = (node.text?.toString() ?: node.contentDescription?.toString() ?: "").trim()
+                    if (!text.equals(label, ignoreCase = true)) continue
+                    if (clickNode(node)) {
+                        Log.i(TAG, "Prompt de captura aceito: '$text'")
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun clickNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable && node.isEnabled &&
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        ) return true
+        var parent = node.parent
+        var hops = 0
+        while (parent != null && hops < 5) {
+            if (parent.isClickable && parent.isEnabled &&
+                parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            ) return true
+            parent = parent.parent
+            hops++
+        }
+        return false
+    }
+
+    private fun clickSystemStart(roots: List<AccessibilityNodeInfo>): Boolean {
+        val hints = listOf("tela", "screen", "gravar", "transmitir", "compartilh", "record", "cast")
+        for (root in roots) {
+            val aboutCapture = hints.any { hint ->
+                root.findAccessibilityNodeInfosByText(hint)?.isNotEmpty() == true
+            }
+            if (!aboutCapture) continue
+            val buttons = root.findAccessibilityNodeInfosByViewId("android:id/button1") ?: continue
+            for (node in buttons) {
+                val text = (node.text?.toString() ?: "").trim()
+                if (text.equals("Cancelar", true) || text.equals("Cancel", true)) continue
+                if (clickNode(node)) {
+                    Log.i(TAG, "Prompt de captura aceito pelo botão do sistema: '$text'")
+                    return true
                 }
             }
         }
@@ -146,7 +251,12 @@ class RemoteAccessibilityService : AccessibilityService() {
         
         val eventType = event.eventType
         val eventPackage = event.packageName?.toString() ?: ""
-        
+
+        // Modo usuário: launcher do sistema ou app fora da lista volta para a tela do coletor.
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            KioskPolicy.guardForeground(this, eventPackage)
+        }
+
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || 
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             
@@ -172,57 +282,24 @@ class RemoteAccessibilityService : AccessibilityService() {
             if (nodesToSearch.isEmpty()) return
             
             // 1. Auto-aceitar o prompt de captura de tela (MediaProjection) se a flag estiver ativa
-            if (autoClickMediaProjection) {
-                val acceptTexts = listOf(
-                    "Iniciar agora", 
-                    "Iniciar", 
-                    "Start now", 
-                    "Start", 
-                    "Permitir", 
-                    "Allow"
-                )
-                for (rootNode in nodesToSearch) {
-                    for (text in acceptTexts) {
-                        val nodes = rootNode.findAccessibilityNodeInfosByText(text)
-                        if (nodes != null && nodes.isNotEmpty()) {
-                            for (node in nodes) {
-                                if (node.isClickable) {
-                                    if (node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
-                                        Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no nó: '${node.text}')")
-                                        autoClickMediaProjection = false
-                                        return
-                                    }
-                                } else {
-                                    var parent = node.parent
-                                    while (parent != null) {
-                                        if (parent.isClickable) {
-                                            if (parent.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) {
-                                                Log.i(TAG, "Prompt de captura de tela auto-aceito (clique no pai de: '${node.text}')")
-                                                autoClickMediaProjection = false
-                                                return
-                                            }
-                                        }
-                                        parent = parent.parent
-                                    }
-                                }
-                            }
-                        }
-                    }
+            if (autoClickMediaProjection && prepareEntireScreen(nodesToSearch)) {
+                if (clickProjectionStart(nodesToSearch) || clickSystemStart(nodesToSearch)) {
+                    autoClickMediaProjection = false
+                    return
                 }
             }
             
-            // 2. Auto-aceitar diálogos de ativação de GPS / Precisão de Localização do Google
-            if (eventPackage == "com.google.android.gms" || eventPackage == "android" || eventPackage == "com.android.settings") {
+            // 2. Só o diálogo de GPS. Não clicar em Permitir/OK nas configurações:
+            // isso reabria a mesma tela de acessibilidade e impedia o Voltar.
+            if ((eventPackage == "com.google.android.gms" || eventPackage == "android") &&
+                nodesToSearch.any { windowMentionsLocation(it) }
+            ) {
                 val gpsAcceptTexts = listOf(
                     "Ativar",
-                    "OK",
                     "Concordo",
                     "Aceito",
                     "Agree",
-                    "I agree",
-                    "Yes",
-                    "Permitir",
-                    "Allow"
+                    "I agree"
                 )
                 for (rootNode in nodesToSearch) {
                     for (text in gpsAcceptTexts) {
@@ -321,6 +398,15 @@ class RemoteAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    private fun windowMentionsLocation(root: android.view.accessibility.AccessibilityNodeInfo): Boolean {
+        val hints = listOf("localiza", "gps", "location", "precis")
+        for (hint in hints) {
+            val nodes = root.findAccessibilityNodeInfosByText(hint)
+            if (nodes != null && nodes.isNotEmpty()) return true
+        }
+        return false
     }
 
     /**
@@ -459,13 +545,151 @@ class RemoteAccessibilityService : AccessibilityService() {
      * Executa ações físicas globais (Home, Back, Recents)
      */
     fun performAndroidAction(actionCode: String): Boolean {
-        val action = when (actionCode.lowercase()) {
-            "back" -> GLOBAL_ACTION_BACK
-            "home" -> GLOBAL_ACTION_HOME
-            "recents" -> GLOBAL_ACTION_RECENTS
+        when (actionCode.lowercase()) {
+            "back" -> return performGlobalAction(GLOBAL_ACTION_BACK)
+            "home" -> return performGlobalAction(GLOBAL_ACTION_HOME)
+            "recents" -> return performGlobalAction(GLOBAL_ACTION_RECENTS)
+            "backspace" -> {
+                NexisTyper.enqueue(this, { it.backspace() }) { replaceFocused(::backspaceText) }
+                return true
+            }
+            "enter" -> {
+                NexisTyper.enqueue(this, { it.enter() }) { pressEnter() }
+                return true
+            }
+            "keyboard_show" -> return setKeyboard(true)
+            "keyboard_hide" -> return setKeyboard(false)
             else -> return false
         }
-        Log.d(TAG, "Executando ação física global: $actionCode")
-        return performGlobalAction(action)
+    }
+
+    fun typeText(value: String): Boolean {
+        if (value.isEmpty()) return false
+        NexisTyper.enqueue(this, { it.commit(value) }) { replaceFocused { text, start, end -> insertText(text, start, end, value) } }
+        return true
+    }
+
+    private fun insertText(text: String, start: Int, end: Int, value: String): String {
+        val base = if (text.equals("Senha", ignoreCase = true)) "" else text
+        if (base.isEmpty()) return value
+        val from = start.coerceIn(0, base.length)
+        val to = end.coerceIn(from, base.length)
+        return base.substring(0, from) + value + base.substring(to)
+    }
+
+    private fun backspaceText(text: String, start: Int, end: Int): String {
+        if (text.isEmpty()) return ""
+        val from = start.coerceIn(0, text.length)
+        val to = end.coerceIn(from, text.length)
+        if (from != to) return text.removeRange(from, to)
+        if (from == 0) return text
+        return text.removeRange(from - 1, from)
+    }
+
+    private fun replaceFocused(change: (String, Int, Int) -> String): Boolean {
+        val node = focusedEditable() ?: return false
+        val showingHint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
+        val text = if (showingHint) "" else node.text?.toString().orEmpty()
+        var start = if (showingHint) 0 else node.textSelectionStart
+        var end = if (showingHint) 0 else node.textSelectionEnd
+        if (start < 0 || end < 0) {
+            start = text.length
+            end = text.length
+        }
+        val next = change(text, start, end)
+        val args = Bundle()
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, next)
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok) {
+            val cursor = Bundle()
+            cursor.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, next.length)
+            cursor.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, next.length)
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, cursor)
+        }
+        node.recycle()
+        return ok
+    }
+
+    private fun pressEnter(): Boolean {
+        val node = focusedEditable() ?: return false
+        val ok = if (Build.VERSION.SDK_INT >= 30) {
+            node.performAction(0x00200000)
+        } else {
+            false
+        }
+        if (!ok) {
+            val text = if (Build.VERSION.SDK_INT >= 26 && node.isShowingHintText) "" else node.text?.toString().orEmpty()
+            val args = Bundle()
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text + "\n")
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+        node.recycle()
+        return true
+    }
+
+    private fun focusedEditable(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focused != null && focused.isEditable) return focused
+        focused?.recycle()
+        return findEditable(root)
+    }
+
+    private fun findEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isFocused) return AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findEditable(child)
+            child.recycle()
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun setKeyboard(show: Boolean): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        softKeyboardController.showMode = if (show) {
+            AccessibilityService.SHOW_MODE_AUTO
+        } else {
+            AccessibilityService.SHOW_MODE_HIDDEN
+        }
+        if (show) {
+            allowImeWithHardKeyboard()
+            // Sem campo focado o Android não abre o teclado: foca o primeiro campo da tela.
+            val root = rootInActiveWindow
+            val node = focusedEditable() ?: root?.let { anyEditable(it) }
+            if (node != null) {
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                node.recycle()
+            } else {
+                Log.i(TAG, "Teclado: nenhum campo de texto na tela.")
+            }
+        }
+        return true
+    }
+
+    /** Primeiro campo editável visível, mesmo sem foco. */
+    private fun anyEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isVisibleToUser) return AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = anyEditable(child)
+            child.recycle()
+            if (found != null) return found
+        }
+        return null
+    }
+
+    /** MC33 tem teclado físico: sem esta opção o Android esconde o teclado da tela. */
+    private fun allowImeWithHardKeyboard() {
+        try {
+            val dpm = getSystemService(DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            if (!dpm.isDeviceOwnerApp(packageName)) return
+            val admin = android.content.ComponentName(this, DeviceAdminReceiver::class.java)
+            dpm.setSecureSetting(admin, "show_ime_with_hard_keyboard", "1")
+        } catch (e: Exception) {
+            Log.w(TAG, "Teclado com teclado físico: ${e.message}")
+        }
     }
 }

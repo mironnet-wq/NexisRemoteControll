@@ -12,6 +12,7 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
         Toast.makeText(context, "Nexis DPC: Privilégios de Administrador Habilitados", Toast.LENGTH_SHORT).show()
         setupResetPasswordToken(context)
         applyEnterprisePolicies(context)
+        AccessibilitySetup.enable(context)
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
@@ -24,6 +25,7 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
         Toast.makeText(context, "Nexis DPC: Provisionamento Concluído com Sucesso", Toast.LENGTH_LONG).show()
         setupResetPasswordToken(context)
         applyEnterprisePolicies(context)
+        AccessibilitySetup.enable(context)
     }
 
     override fun onPasswordChanged(context: Context, intent: Intent) {

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Acesso remoto: monitor com o cursor do técnico e ondas de conexão. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- moldura do monitor -->
+    <path android:fillColor="#FFFFFF" android:pathData="M35,33h38a5,5 0 0 1 5,5v24a5,5 0 0 1 -5,5h-38a5,5 0 0 1 -5,-5v-24a5,5 0 0 1 5,-5z" />
+    <!-- tela -->
+    <path android:fillColor="#0F2A66" android:pathData="M36,37h36a2,2 0 0 1 2,2v21a2,2 0 0 1 -2,2h-36a2,2 0 0 1 -2,-2v-21a2,2 0 0 1 2,-2z" />
+    <!-- pé e base -->
+    <path android:fillColor="#FFFFFF" android:pathData="M50,67h8l1.5,6h-11z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M43,73h22a1.8,1.8 0 0 1 0,3.6h-22a1.8,1.8 0 0 1 0,-3.6z" />
+    <!-- ondas de conexão -->
+    <path android:fillColor="#00000000" android:strokeColor="#22D3EE" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M62,47a5,5 0 0 1 5,5" />
+    <path android:fillColor="#00000000" android:strokeColor="#22D3EE" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:pathData="M62,42a10,10 0 0 1 10,10" />
+    <path android:fillColor="#22D3EE" android:pathData="M62,52m-2,0a2,2 0 1 1 4,0a2,2 0 1 1 -4,0" />
+    <!-- cursor do técnico -->
+    <path android:fillColor="#FFFFFF" android:strokeColor="#0B1F4D" android:strokeWidth="1"
+        android:pathData="M42,41l0,15.5l3.8,-3.6l2.6,5.6l2.6,-1.2l-2.6,-5.5l5.2,-0.3z" />
+</vector>

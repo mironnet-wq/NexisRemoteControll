@@ -76,6 +76,8 @@ object EnterpriseConnectivityPolicy {
             clearRestrictionIfSet(dpm, admin, UserManager.DISALLOW_SHARE_LOCATION, skipped)
             // Limpa restriction de configuracao de wi-fi para permitir trocar de rede, mantendo o wi-fi ativo
             clearRestrictionIfSet(dpm, admin, UserManager.DISALLOW_CONFIG_WIFI, skipped)
+            // Esta trava derruba o processo com.android.phone no MC33.
+            clearRestrictionIfSet(dpm, admin, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS, skipped)
         } else {
             skipped.add("user_restrictions_require_device_owner")
             Log.i(TAG, "User Restrictions ignoradas: requer Device Owner.")
@@ -120,9 +122,9 @@ object EnterpriseConnectivityPolicy {
         var mobileDataRestored = false
 
         try {
-            val locMgr = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            if (enforceLocation && !locMgr.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                gpsRestored = enforceLocationEnabled(dpm, admin)
+            if (enforceLocation && !isLocationServiceOn(context)) {
+                val applied = enforceLocationEnabled(dpm, admin)
+                gpsRestored = applied && isLocationServiceOn(context)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao reforçar GPS: ${e.message}")
@@ -137,7 +139,7 @@ object EnterpriseConnectivityPolicy {
             Log.e(TAG, "Erro ao reforçar Wi-Fi: ${e.message}")
         }
 
-        if (dpm.isDeviceOwnerApp(context.packageName)) {
+        if (dpm.isDeviceOwnerApp(context.packageName) && allowsMobileDataRestore(context)) {
             try {
                 if (!isMobileDataEnabled(context)) {
                     mobileDataRestored = enforceMobileDataEnabled(context, dpm, admin)
@@ -177,8 +179,7 @@ object EnterpriseConnectivityPolicy {
         failed: MutableList<String>
     ) {
         val restrictions = mutableListOf(
-            UserManager.DISALLOW_CHANGE_WIFI_STATE,
-            UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS
+            UserManager.DISALLOW_CHANGE_WIFI_STATE
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -213,6 +214,24 @@ object EnterpriseConnectivityPolicy {
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao aplicar restriction $restriction: ${e.message}")
             RestrictionOutcome.FAILED
+        }
+    }
+
+    fun isLocationServiceOn(context: Context): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val locMgr = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                if (locMgr.isLocationEnabled) return true
+            }
+            val mode = Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.LOCATION_MODE,
+                Settings.Secure.LOCATION_MODE_OFF
+            )
+            mode != Settings.Secure.LOCATION_MODE_OFF
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível ler a localização: ${e.message}")
+            true
         }
     }
 
@@ -275,6 +294,13 @@ object EnterpriseConnectivityPolicy {
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao remover restriction $restriction: ${e.message}")
         }
+    }
+
+    /** MC33 usa Wi-Fi. Forçar dados móveis abre o discador e o processo com.android.phone cai. */
+    fun allowsMobileDataRestore(context: Context): Boolean {
+        val maker = Build.MANUFACTURER.orEmpty()
+        if (maker.contains("zebra", true) || maker.contains("symbol", true)) return false
+        return context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TELEPHONY)
     }
 
     fun isMobileDataEnabled(context: Context): Boolean {

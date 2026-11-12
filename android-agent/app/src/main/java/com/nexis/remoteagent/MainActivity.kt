@@ -11,10 +11,15 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.IntentFilter
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -26,6 +31,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var txtDeviceOwner: TextView
     private lateinit var txtLocationPermission: TextView
     private lateinit var btnStartService: Button
+    private var a11yPrompted = false
+    private var captureArmed = false
+    private var activityResumed = false
+    private var captureReadyRegistered = false
+    private val captureReady = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            window.decorView.post {
+                if (!isFinishing) moveTaskToBack(true)
+            }
+        }
+    }
 
     private val startMediaProjection = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -39,7 +55,9 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Conexão de suporte e espelhamento iniciados", Toast.LENGTH_SHORT).show()
             btnStartService.text = "Suporte Ativo (Reconectar)"
             btnStartService.setBackgroundColor(Color.parseColor("#10B981")) // Emerald Green
-            moveTaskToBack(true)
+            window.decorView.postDelayed({
+                if (!isFinishing) moveTaskToBack(true)
+            }, 3000)
         } else {
             Toast.makeText(this, "Permissão de tela recusada. Iniciando suporte básico.", Toast.LENGTH_SHORT).show()
             val serviceIntent = Intent(this, RemoteControlService::class.java)
@@ -53,7 +71,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
         // Permitir mostrar sobre a tela de bloqueio e acender a tela
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -84,6 +101,15 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 10)
         }
         rootLayout.addView(titleText)
+
+        val versionText = TextView(this).apply {
+            text = "Versão ${BuildConfig.VERSION_NAME}"
+            textSize = 16f
+            setTextColor(Color.parseColor("#38BDF8"))
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, 8)
+        }
+        rootLayout.addView(versionText)
 
         // Subtítulo
         val subTitleText = TextView(this).apply {
@@ -124,11 +150,19 @@ class MainActivity : AppCompatActivity() {
         rootLayout.addView(cardLayout)
 
         // Botões de Configuração Rápida
-        createActionButton(rootLayout, "Configurar Acessibilidade") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        createActionButton(rootLayout, "Entrar no quiosque") {
+            KioskPolicy.setLocal(this, "user", KioskPolicy.packages(this))
         }
 
-        createActionButton(rootLayout, "Permissões de Localização") {
+        createActionButton(rootLayout, "Modo admin") {
+            startActivity(Intent(this, KioskActivity::class.java).putExtra("gate", "password"))
+        }
+
+        createActionButton(rootLayout, "Configurar Acessibilidade") {
+            openAccessibilitySettings()
+        }
+
+        createActionButton(rootLayout, "Fornecer localização") {
             requestLocationPermission()
         }
 
@@ -150,10 +184,16 @@ class MainActivity : AppCompatActivity() {
         }
         rootLayout.addView(btnStartService)
 
-        setContentView(rootLayout)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(rootLayout)
+        }
+        setContentView(scroll)
         
         // Auto-iniciar conexão de suporte em background para registrar como Online no servidor
-        val autoStartIntent = Intent(this, RemoteControlService::class.java)
+        val autoStartIntent = Intent(this, RemoteControlService::class.java).apply {
+            action = "ensure_link"
+        }
         try {
             ContextCompat.startForegroundService(this, autoStartIntent)
             Toast.makeText(this, "Conectando ao console de suporte...", Toast.LENGTH_SHORT).show()
@@ -162,6 +202,63 @@ class MainActivity : AppCompatActivity() {
         }
 
         handleIntent(intent)
+        registerCaptureReady()
+        grantLocationIfOwner()
+        enableAccessibilityIfOwner()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestLocationPermission()
+        }
+        window.decorView.postDelayed({
+            if (isFinishing || a11yPrompted || RemoteAccessibilityService.instance != null) return@postDelayed
+            if (KioskPolicy.mode(this) == "user") return@postDelayed
+            a11yPrompted = true
+            AlertDialog.Builder(this)
+                .setTitle("Acessibilidade")
+                .setMessage("O toque remoto ainda não ligou a acessibilidade. Abra a configuração e ative o serviço Nexis.")
+                .setPositiveButton("Abrir configurações") { _, _ ->
+                    openAccessibilitySettings()
+                }
+                .setNegativeButton("Depois", null)
+                .show()
+        }, 1500)
+    }
+
+    /**
+     * No modo usuário as Configurações ficam ocultas pelo DPC: abrir daria erro e fecharia o app.
+     * Também não é para o operador chegar nelas por aqui.
+     */
+    private fun openAccessibilitySettings() {
+        if (KioskPolicy.mode(this) == "user") {
+            Toast.makeText(this, "Entre no modo admin para mexer nas configurações.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Configurações indisponíveis neste modo.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onDestroy() {
+        if (captureReadyRegistered) {
+            try {
+                unregisterReceiver(captureReady)
+            } catch (_: Exception) {
+            }
+            captureReadyRegistered = false
+        }
+        super.onDestroy()
+    }
+
+    private fun registerCaptureReady() {
+        if (captureReadyRegistered) return
+        val filter = IntentFilter(RemoteControlService.ACTION_CAPTURE_READY)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(captureReady, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(captureReady, filter)
+        }
+        captureReadyRegistered = true
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -171,13 +268,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent != null && intent.getStringExtra("action") == "start_capture") {
-            startSupportService()
+            if (activityResumed) startSupportService()
+            else captureArmed = true
         }
     }
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         updatePermissionStatus()
+        if (captureArmed) {
+            captureArmed = false
+            startSupportService()
+        }
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        super.onPause()
     }
 
     private fun createStatusRow(parent: LinearLayout, title: String): TextView {
@@ -255,6 +363,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun grantLocationIfOwner() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        if (!dpm.isDeviceOwnerApp(packageName)) return
+        val admin = ComponentName(this, DeviceAdminReceiver::class.java)
+        listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION).forEach { perm ->
+            try {
+                if (dpm.getPermissionGrantState(admin, packageName, perm) == DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED) return@forEach
+                dpm.setPermissionGrantState(admin, packageName, perm, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED)
+            } catch (e: Exception) {
+                android.util.Log.w("NexisMainActivity", "Localização não concedida pelo dono: ${e.message}")
+            }
+        }
+    }
+
+    private fun enableAccessibilityIfOwner() {
+        AccessibilitySetup.enable(this)
+    }
+
     private fun requestLocationPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(
@@ -304,10 +430,26 @@ class MainActivity : AppCompatActivity() {
     private fun launchMediaProjection() {
         try {
             val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-            startMediaProjection.launch(mpManager.createScreenCaptureIntent())
+            startMediaProjection.launch(screenCaptureIntent(mpManager))
         } catch (e: Exception) {
             android.util.Log.e("NexisMainActivity", "Erro ao iniciar MediaProjection intent: ${e.message}")
         }
+    }
+
+    /** No Android 14 o padrão é gravar só o app. Sem isto a tela remota abre vazia. */
+    private fun screenCaptureIntent(manager: android.media.projection.MediaProjectionManager): Intent {
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                val configClass = Class.forName("android.media.projection.MediaProjectionConfig")
+                val config = configClass.getMethod("createConfigForDefaultDisplay").invoke(null)
+                val method = manager.javaClass.getMethod("createScreenCaptureIntent", configClass)
+                val intent = method.invoke(manager, config) as? Intent
+                if (intent != null) return intent
+            } catch (e: Exception) {
+                android.util.Log.w("NexisMainActivity", "Tela inteira: ${e.message}")
+            }
+        }
+        return manager.createScreenCaptureIntent()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
