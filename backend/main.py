@@ -561,6 +561,33 @@ async def internal_calibrate(device_id: str, req: CalibrationRequest, _: bool = 
     return {"ok": True, "req": token}
 
 
+@app.get("/internal/wifi-heatmap")
+async def internal_wifi_heatmap(days: int = 30, _: bool = Depends(require_gestor)):
+    cutoff = (datetime.utcnow() - timedelta(days=max(1, min(int(days or 30), 365)))).isoformat() + "Z"
+    cells = []
+    devices = set()
+    total = 0
+    for c in _load_grid().values():
+        if not isinstance(c, dict) or str(c.get("last") or "") < cutoff or not c.get("n"):
+            continue
+        n = int(c["n"])
+        total += n
+        devices.update(c.get("devs") or [])
+        cells.append({
+            "lat": round(c["lat"], 7), "lng": round(c["lng"], 7), "rssi": round(c["sum"] / n, 1),
+            "n": n, "min": c.get("min"), "max": c.get("max"), "last": c.get("last"), "devs": len(c.get("devs") or []),
+        })
+    return {"cells": cells, "samples": total, "devices": len(devices)}
+
+
+@app.delete("/internal/wifi-heatmap")
+async def internal_wifi_heatmap_clear(_: bool = Depends(require_gestor)):
+    global _grid
+    _grid = {}
+    _save_grid()
+    return {"ok": True}
+
+
 @app.get("/internal/calibration")
 async def internal_calibration_list(_: bool = Depends(require_gestor)):
     return {"anchors": [{k: v for k, v in a.items() if k != "aps"} | {"redes": len(a.get("aps") or {})} for a in load_anchors()]}
@@ -986,21 +1013,27 @@ def fingerprint_point(aps) -> Optional[dict]:
             continue
         keys = set(seen) | set(ref)
         dist = (sum((seen.get(k, _MISSING_DBM) - ref.get(k, _MISSING_DBM)) ** 2 for k in keys) / len(keys)) ** 0.5
-        scored.append((dist, a))
+        rms_common = (sum((seen[k] - ref[k]) ** 2 for k in common) / len(common)) ** 0.5
+        miss = 1.0 - len(common) / len(keys)
+        scored.append((dist, rms_common, miss, len(common), a))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0])
-    near = scored[:3]
-    weights = [1.0 / (d + 1.0) for d, _ in near]
+    best, best_rms, best_miss, best_common, _ = scored[0]
+    # Só mistura pontos quase tão parecidos quanto o melhor; senão a média puxaria o
+    # coletor para o meio do caminho entre dois pontos de calibração distantes.
+    near = [s for s in scored[:3] if s[0] <= best + 4.0]
+    weights = [1.0 / (s[0] + 1.0) ** 3 for s in near]
     tot = sum(weights)
-    lat = sum(w * float(a["latitude"]) for w, (_, a) in zip(weights, near)) / tot
-    lon = sum(w * float(a["longitude"]) for w, (_, a) in zip(weights, near)) / tot
-    best = near[0][0]
+    lat = sum(w * float(s[4]["latitude"]) for w, s in zip(weights, near)) / tot
+    lon = sum(w * float(s[4]["longitude"]) for w, s in zip(weights, near)) / tot
     return {
         "latitude": lat,
         "longitude": lon,
-        "accuracy": round(max(6.0, min(60.0, 5.0 + best * 1.2)), 1),
+        "accuracy": round(max(6.0, min(60.0, 5.0 + best_rms * 1.2 + best_miss * 20.0)), 1),
         "provider": "calibrado",
+        # Leitura muito parecida com a de um ponto calibrado (uso interno, não vai ao histórico).
+        "_strong": best_common >= 3 and best_rms <= 7.0,
     }
 
 
@@ -1017,6 +1050,113 @@ def _wifi_extra(data: dict) -> dict:
     if _BSSID.match(bssid):
         out["bssid"] = bssid
     return out
+
+
+# Mapa de sinal Wi-Fi: grade de ~3 m com a média do sinal (dBm) medido pelos coletores.
+WIFI_GRID_FILE = os.path.join(BASE_DIR, "wifi_signal_grid.json")
+_GRID_DEG = 3.0 / 111320.0
+_GRID_MAX_ACC = 30.0  # posição pior que isso borra o mapa; fica de fora
+HEAT_SWEEP_SECONDS = 300
+_grid: Optional[dict] = None
+
+
+def _load_grid() -> dict:
+    global _grid
+    if _grid is not None:
+        return _grid
+    data = {}
+    if os.path.exists(WIFI_GRID_FILE):
+        try:
+            with open(WIFI_GRID_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    _grid = data
+    if not os.path.exists(WIFI_GRID_FILE):
+        _backfill_grid()
+    return _grid
+
+
+def _save_grid():
+    if _grid is None:
+        return
+    try:
+        tmp = WIFI_GRID_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_grid, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, WIFI_GRID_FILE)
+    except Exception as e:
+        logger.error("Erro ao salvar o mapa de sinal Wi-Fi: %s", e)
+
+
+def add_signal_sample(device_id: str, lat, lng, rssi, accuracy, save: bool = True, when: str = "") -> bool:
+    """Soma uma leitura de sinal à célula da grade onde o coletor estava."""
+    try:
+        lat_f, lng_f, dbm = float(lat), float(lng), float(rssi)
+        acc = float(accuracy if accuracy is not None else 999)
+    except (TypeError, ValueError):
+        return False
+    if not (-90 <= lat_f <= 90 and -180 <= lng_f <= 180) or not (-120 < dbm < 0) or acc > _GRID_MAX_ACC:
+        return False
+    grid = _load_grid()
+    i, j = round(lat_f / _GRID_DEG), round(lng_f / _GRID_DEG)
+    key = f"{i},{j}"
+    cell = grid.get(key)
+    now = when or (datetime.utcnow().isoformat() + "Z")
+    if not isinstance(cell, dict):
+        cell = {"lat": i * _GRID_DEG, "lng": j * _GRID_DEG, "n": 0, "sum": 0.0, "min": dbm, "max": dbm, "first": now, "devs": []}
+        grid[key] = cell
+    cell["n"] += 1
+    cell["sum"] += dbm
+    cell["min"] = min(cell["min"], dbm)
+    cell["max"] = max(cell["max"], dbm)
+    cell["last"] = max(str(cell.get("last") or ""), now)
+    if device_id and device_id not in cell["devs"]:
+        cell["devs"] = (cell["devs"] + [device_id])[-20:]
+    if save:
+        _save_grid()
+    return True
+
+
+def _backfill_grid():
+    """Primeira vez: aproveita as posições com sinal que já estão no histórico."""
+    added = 0
+    for dev, recs in load_location_history().items():
+        for r in recs or []:
+            if r.get("rssi") is not None and add_signal_sample(dev, r.get("latitude"), r.get("longitude"), r.get("rssi"), r.get("accuracy"), save=False, when=str(r.get("timestamp") or "")):
+                added += 1
+    _save_grid()
+    logger.info("Mapa de sinal Wi-Fi iniciado com %d leitura(s) do histórico.", added)
+
+
+def _version_tuple(v) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v or "0").split("."))
+    except ValueError:
+        return (0,)
+
+
+async def heat_sweep_loop():
+    """De 5 em 5 min pede a leitura do Wi-Fi a todos os coletores online (agente 1.0.38+)."""
+    while True:
+        await asyncio.sleep(HEAT_SWEEP_SECONDS)
+        try:
+            for device_id in list(manager.active_devices):
+                info = manager.device_registry.get(device_id) or {}
+                if _version_tuple(info.get("agent_version")) < (1, 0, 38):
+                    continue
+                await manager.send_to_device(device_id, {"type": "wifi_scan", "data": {"req": "heat"}})
+                await asyncio.sleep(0.5)
+        except Exception as exc:
+            logger.warning("Varredura do mapa de sinal: %s", exc)
+
+
+@app.on_event("startup")
+async def _start_heat_sweep():
+    _load_grid()
+    asyncio.create_task(heat_sweep_loop())
 
 
 def add_location_record(device_id: str, data: dict):
@@ -1050,6 +1190,8 @@ def add_location_record(device_id: str, data: dict):
             
     history[device_id] = filtered_records
     save_location_history(history)
+    if new_record.get("rssi") is not None:
+        add_signal_sample(device_id, new_record.get("latitude"), new_record.get("longitude"), new_record.get("rssi"), new_record.get("accuracy"))
     return new_record
 
 def _filtered_location_history(device_id: str) -> list:
@@ -1210,6 +1352,8 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                 })
 
             elif msg_type == "device_log":
+                if str(data.get("message") or "").startswith("Leitura do Wi-Fi enviada"):
+                    continue
                 await manager.broadcast_json({
                     "type": "device_log",
                     "device_id": device_id,
@@ -1230,9 +1374,11 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                     raw_acc = float(loc_data.get("accuracy") or 999)
                 except (TypeError, ValueError):
                     raw_acc = 999.0
-                if str(loc_data.get("provider") or "") != "gps" and raw_acc > 15 and loc_data.get("aps"):
+                if str(loc_data.get("provider") or "") != "gps" and loc_data.get("aps"):
                     cal = fingerprint_point(loc_data.get("aps"))
-                    if cal and cal["accuracy"] < raw_acc:
+                    # A rede do aparelho diz ±11 m, mas oscila; um ponto calibrado com o
+                    # mesmo Wi-Fi é a posição conferida no local, então vale mais.
+                    if cal and (cal.pop("_strong", False) or (raw_acc > 15 and cal["accuracy"] < raw_acc)):
                         cal.update(_wifi_extra(loc_data))
                         cal["raw_provider"] = loc_data.get("provider")
                         cal["raw_accuracy"] = raw_acc
@@ -1248,7 +1394,12 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                 payload = data.get("data") if isinstance(data.get("data"), dict) else data
                 pend = PENDING_CALIBRATION.get(device_id)
                 aps = _ap_map(payload.get("aps") or [])
-                if pend and pend.get("req") == payload.get("req") and time.time() - pend["at"] < 120:
+                wifi_now = payload.get("wifi") if isinstance(payload.get("wifi"), dict) else {}
+                if payload.get("req") == "heat":
+                    fp = fingerprint_point(payload.get("aps") or [])
+                    if fp and wifi_now.get("rssi") is not None:
+                        add_signal_sample(device_id, fp["latitude"], fp["longitude"], wifi_now.get("rssi"), fp["accuracy"])
+                elif pend and pend.get("req") == payload.get("req") and time.time() - pend["at"] < 120:
                     PENDING_CALIBRATION.pop(device_id, None)
                     if len(aps) < 1:
                         msg, level = "Calibração não salva: o coletor não viu nenhuma rede Wi-Fi.", "warn"
@@ -1265,6 +1416,8 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                             "aps": aps,
                         })
                         save_anchors(anchors)
+                        if wifi_now.get("rssi") is not None:
+                            add_signal_sample(device_id, pend["latitude"], pend["longitude"], wifi_now.get("rssi"), 3)
                         msg, level = f"Ponto de calibração salvo ({len(aps)} rede(s) Wi-Fi).", "info"
                     await manager.broadcast_json({"type": "device_log", "device_id": device_id, "status": level, "message": msg})
                     await manager.broadcast_json({"type": "calibration_saved", "device_id": device_id, "ok": level == "info"})
