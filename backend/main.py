@@ -467,7 +467,7 @@ CLIENT_WS_COMMANDS = {"click", "swipe", "key", "text", "start_mirroring", "stop_
 INTERNAL_COMMANDS = {
     "lock_device", "clear_password", "wipe_device", "toast", "install_app",
     "request_location", "enable_location", "start_monitoring", "stop_monitoring", "set_location_interval",
-    "stop_mirroring", "set_kiosk", "set_inventory", "list_apps",
+    "stop_mirroring", "set_kiosk", "set_inventory", "list_apps", "wifi_scan",
 }
 
 
@@ -525,6 +525,55 @@ async def internal_command(device_id: str, cmd: InternalCommand, _: bool = Depen
 @app.get("/internal/devices/{device_id}/location-history")
 async def internal_location_history(device_id: str, _: bool = Depends(require_gestor)):
     return {"records": _filtered_location_history(device_id)}
+
+
+class CalibrationRequest(BaseModel):
+    latitude: float
+    longitude: float
+    label: str = ""
+    requested_by: str = ""
+
+
+# Pedido de calibração aguardando a leitura do Wi-Fi do coletor (device_id -> pedido).
+PENDING_CALIBRATION: Dict[str, dict] = {}
+
+
+@app.post("/internal/devices/{device_id}/calibrate")
+async def internal_calibrate(device_id: str, req: CalibrationRequest, _: bool = Depends(require_gestor)):
+    """Marca o ponto real do coletor; ele lê o Wi-Fi e a leitura vira um ponto de calibração."""
+    if not (-90 <= req.latitude <= 90 and -180 <= req.longitude <= 180):
+        raise HTTPException(status_code=400, detail="posição inválida")
+    if device_id not in manager.active_devices:
+        raise HTTPException(status_code=409, detail="coletor offline")
+    token = secrets.token_hex(6)
+    PENDING_CALIBRATION[device_id] = {
+        "req": token,
+        "latitude": float(req.latitude),
+        "longitude": float(req.longitude),
+        "label": str(req.label or "")[:80],
+        "requested_by": str(req.requested_by or "")[:80],
+        "at": time.time(),
+    }
+    if not await manager.send_to_device(device_id, {"type": "wifi_scan", "data": {"req": token}}):
+        PENDING_CALIBRATION.pop(device_id, None)
+        raise HTTPException(status_code=409, detail="coletor não respondeu")
+    logger.info("Calibração pedida para %s por %s", device_id, req.requested_by or "?")
+    return {"ok": True, "req": token}
+
+
+@app.get("/internal/calibration")
+async def internal_calibration_list(_: bool = Depends(require_gestor)):
+    return {"anchors": [{k: v for k, v in a.items() if k != "aps"} | {"redes": len(a.get("aps") or {})} for a in load_anchors()]}
+
+
+@app.delete("/internal/calibration/{anchor_id}")
+async def internal_calibration_delete(anchor_id: str, _: bool = Depends(require_gestor)):
+    anchors = load_anchors()
+    left = [a for a in anchors if a.get("id") != anchor_id]
+    if len(left) == len(anchors):
+        raise HTTPException(status_code=404, detail="ponto não encontrado")
+    save_anchors(left)
+    return {"ok": True}
 
 
 def _safe_apk_name(name: str) -> str:
@@ -881,6 +930,95 @@ def lookup_cached_wifi(aps: list) -> Optional[dict]:
     return None
 
 
+ANCHORS_FILE = os.path.join(BASE_DIR, "location_wifi_anchors.json")
+_MISSING_DBM = -95.0
+
+
+def load_anchors() -> list:
+    if not os.path.exists(ANCHORS_FILE):
+        return []
+    try:
+        with open(ANCHORS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_anchors(anchors: list):
+    try:
+        with open(ANCHORS_FILE, "w", encoding="utf-8") as f:
+            json.dump(anchors[-500:], f, ensure_ascii=False)
+    except Exception as e:
+        logger.error("Erro ao salvar pontos de calibração: %s", e)
+
+
+def _ap_map(aps) -> dict:
+    """{BSSID: dBm} das redes vistas (aceita lista [{bssid,rssi}] ou dict)."""
+    out = {}
+    items = aps.items() if isinstance(aps, dict) else [((a or {}).get("bssid"), (a or {}).get("rssi")) for a in (aps or []) if isinstance(a, dict)]
+    for bssid, rssi in items:
+        mac = str(bssid or "").strip().upper()
+        if not _BSSID.match(mac):
+            continue
+        try:
+            dbm = float(rssi)
+        except (TypeError, ValueError):
+            continue
+        if -120 < dbm < 0:
+            out[mac] = max(out.get(mac, -999.0), dbm)
+    return out
+
+
+def fingerprint_point(aps) -> Optional[dict]:
+    """
+    Estima a posição comparando o Wi-Fi visto agora com os pontos de calibração
+    (k vizinhos mais parecidos, média ponderada). Só responde com 2+ redes em comum.
+    """
+    seen = _ap_map(aps)
+    if not seen:
+        return None
+    scored = []
+    for a in load_anchors():
+        ref = _ap_map(a.get("aps") or {})
+        common = set(seen) & set(ref)
+        if len(common) < min(2, len(seen)):
+            continue
+        keys = set(seen) | set(ref)
+        dist = (sum((seen.get(k, _MISSING_DBM) - ref.get(k, _MISSING_DBM)) ** 2 for k in keys) / len(keys)) ** 0.5
+        scored.append((dist, a))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: x[0])
+    near = scored[:3]
+    weights = [1.0 / (d + 1.0) for d, _ in near]
+    tot = sum(weights)
+    lat = sum(w * float(a["latitude"]) for w, (_, a) in zip(weights, near)) / tot
+    lon = sum(w * float(a["longitude"]) for w, (_, a) in zip(weights, near)) / tot
+    best = near[0][0]
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "accuracy": round(max(6.0, min(60.0, 5.0 + best * 1.2)), 1),
+        "provider": "calibrado",
+    }
+
+
+def _wifi_extra(data: dict) -> dict:
+    """Sinal Wi-Fi guardado junto da posição (dBm da rede conectada e o ponto de acesso)."""
+    out = {}
+    try:
+        rssi = int(data.get("rssi"))
+        if -120 < rssi < 0:
+            out["rssi"] = rssi
+    except (TypeError, ValueError):
+        pass
+    bssid = str(data.get("bssid") or "").strip().upper()
+    if _BSSID.match(bssid):
+        out["bssid"] = bssid
+    return out
+
+
 def add_location_record(device_id: str, data: dict):
     history = load_location_history()
     if device_id not in history:
@@ -893,6 +1031,10 @@ def add_location_record(device_id: str, data: dict):
         "accuracy": data.get("accuracy"),
         "provider": data.get("provider")
     }
+    new_record.update(_wifi_extra(data))
+    if data.get("raw_provider"):
+        new_record["raw_provider"] = data.get("raw_provider")
+        new_record["raw_accuracy"] = data.get("raw_accuracy")
     history[device_id].append(new_record)
     
     # Filtrar registros antigos (> 5 dias)
@@ -992,6 +1134,17 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                     # Agente 1.0.37+: diz se é Device Owner. Sem isso o quiosque não aplica.
                     if "device_owner" in data:
                         fields["device_owner"] = bool(data.get("device_owner"))
+                    wifi = data.get("wifi") if isinstance(data.get("wifi"), dict) else None
+                    if wifi:
+                        extra = _wifi_extra(wifi)
+                        fields["wifi_rssi"] = extra.get("rssi")
+                        fields["wifi_bssid"] = extra.get("bssid", "")
+                        fields["wifi_ssid"] = str(wifi.get("ssid") or "")[:64]
+                        try:
+                            fields["wifi_freq"] = int(wifi.get("freq") or 0)
+                            fields["wifi_link"] = int(wifi.get("link") or 0)
+                        except (TypeError, ValueError):
+                            pass
                     manager.device_registry[device_id].update(fields)
                 await manager.broadcast_device_list()
 
@@ -1073,6 +1226,17 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                         loc_data.get("longitude"),
                         loc_data.get("accuracy"),
                     )
+                try:
+                    raw_acc = float(loc_data.get("accuracy") or 999)
+                except (TypeError, ValueError):
+                    raw_acc = 999.0
+                if str(loc_data.get("provider") or "") != "gps" and raw_acc > 15 and loc_data.get("aps"):
+                    cal = fingerprint_point(loc_data.get("aps"))
+                    if cal and cal["accuracy"] < raw_acc:
+                        cal.update(_wifi_extra(loc_data))
+                        cal["raw_provider"] = loc_data.get("provider")
+                        cal["raw_accuracy"] = raw_acc
+                        loc_data = cal
                 new_rec = add_location_record(device_id, loc_data)
                 await manager.broadcast_json({
                     "type": "location_update",
@@ -1080,13 +1244,43 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                     "data": new_rec
                 })
 
+            elif msg_type == "wifi_scan":
+                payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                pend = PENDING_CALIBRATION.get(device_id)
+                aps = _ap_map(payload.get("aps") or [])
+                if pend and pend.get("req") == payload.get("req") and time.time() - pend["at"] < 120:
+                    PENDING_CALIBRATION.pop(device_id, None)
+                    if len(aps) < 1:
+                        msg, level = "Calibração não salva: o coletor não viu nenhuma rede Wi-Fi.", "warn"
+                    else:
+                        anchors = load_anchors()
+                        anchors.append({
+                            "id": secrets.token_hex(6),
+                            "latitude": pend["latitude"],
+                            "longitude": pend["longitude"],
+                            "label": pend.get("label") or "",
+                            "device_id": device_id,
+                            "requested_by": pend.get("requested_by") or "",
+                            "at": datetime.utcnow().isoformat() + "Z",
+                            "aps": aps,
+                        })
+                        save_anchors(anchors)
+                        msg, level = f"Ponto de calibração salvo ({len(aps)} rede(s) Wi-Fi).", "info"
+                    await manager.broadcast_json({"type": "device_log", "device_id": device_id, "status": level, "message": msg})
+                    await manager.broadcast_json({"type": "calibration_saved", "device_id": device_id, "ok": level == "info"})
+
             elif msg_type == "wifi_location":
                 payload = data.get("data") if isinstance(data.get("data"), dict) else data
                 aps = payload.get("aps") if isinstance(payload.get("aps"), list) else []
-                point = await asyncio.to_thread(lookup_wifi_point, aps[:8])
+                point = fingerprint_point(aps)
+                if point is None:
+                    point = await asyncio.to_thread(lookup_wifi_point, aps[:8])
                 if point is None:
                     point = lookup_cached_wifi(aps[:8])
                 if point:
+                    strongest = max(_ap_map(aps).values(), default=None)
+                    if strongest is not None:
+                        point["rssi"] = int(strongest)
                     new_rec = add_location_record(device_id, point)
                     await manager.broadcast_json({
                         "type": "location_update",
@@ -1097,14 +1291,14 @@ async def websocket_device(websocket: WebSocket, device_id: str):
                         "type": "device_log",
                         "device_id": device_id,
                         "status": "info",
-                        "message": "Ponto do MC33 estimado pelo Wi-Fi."
+                        "message": "Ponto estimado pelo Wi-Fi" + (" (calibrado)." if point.get("provider") == "calibrado" else ".")
                     })
                 else:
                     await manager.broadcast_json({
                         "type": "device_log",
                         "device_id": device_id,
                         "status": "warn",
-                        "message": "MC33 sem GPS. As redes Wi-Fi vistas não estão num mapa público."
+                        "message": "Sem GPS. As redes Wi-Fi vistas não têm ponto de calibração nem estão num mapa público."
                     })
 
     except WebSocketDisconnect:

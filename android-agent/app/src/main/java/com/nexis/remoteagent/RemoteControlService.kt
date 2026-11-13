@@ -502,6 +502,21 @@ class RemoteControlService : Service() {
                     EnterpriseConnectivityPolicy.reinforceConnectivity(this, enforceLocation = true)
                     requestSingleLocation()
                 }
+                "wifi_scan" -> {
+                    val req = data.optString("req", "")
+                    scanWifi { aps ->
+                        val payload = JSONObject().apply {
+                            put("type", "wifi_scan")
+                            put("data", JSONObject().apply {
+                                put("req", req)
+                                put("aps", aps)
+                                wifiSnapshot()?.let { put("wifi", it) }
+                            })
+                        }
+                        sendOrReconnect(payload.toString())
+                        sendDeviceLog("info", "Leitura do Wi-Fi enviada (${aps.length()} rede(s)).")
+                    }
+                }
                 "set_location_interval" -> {
                     val interval = data.optLong("interval", 300000L)
                     val distance = data.optDouble("distance", 50.0).toFloat()
@@ -701,6 +716,7 @@ class RemoteControlService : Service() {
                 put("serial", deviceSerial())
                 put("mac", deviceMac())
                 put("ip", deviceIp())
+                wifiSnapshot()?.let { put("wifi", it) }
             }
             sendOrReconnect(payload.toString())
         } catch (e: Exception) {
@@ -1214,7 +1230,7 @@ class RemoteControlService : Service() {
     private fun startMapLocation() {
         grantLocationIfOwner()
         EnterpriseConnectivityPolicy.reinforceConnectivity(this, enforceLocation = true)
-        if (isMc33()) forceHighAccuracy()
+        forceHighAccuracy()
         if (!hasLocationPermission()) {
             sendDeviceLog("warn", "Sem permissão de localização para o mapa.")
             return
@@ -1229,26 +1245,17 @@ class RemoteControlService : Service() {
             isContinuousLocationActive = false
             subscribeMapProviders(ensureLocationListener())
             mapLocationActive = true
-            if (isMc33()) {
-                Handler(Looper.getMainLooper()).postDelayed({
-                    forceHighAccuracy()
-                    val listener = locationListener
-                    if (listener != null) subscribeMapProviders(listener)
-                }, 2_000)
-                Handler(Looper.getMainLooper()).postDelayed({
-                    if (!sawFreshLocation) sendWifiObservation()
-                }, 20_000)
-            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                forceHighAccuracy()
+                val listener = locationListener
+                if (listener != null) subscribeMapProviders(listener)
+            }, 2_000)
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!sawFreshLocation) sendWifiObservation()
+            }, 20_000)
         } catch (e: Exception) {
             sendDeviceLog("error", "Mapa: ${e.message}")
         }
-    }
-
-    private fun isMc33(): Boolean {
-        val model = Build.MODEL ?: ""
-        val device = Build.DEVICE ?: ""
-        val product = Build.PRODUCT ?: ""
-        return listOf(model, device, product).any { it.contains("MC33", ignoreCase = true) }
     }
 
     private fun forceHighAccuracy() {
@@ -1288,8 +1295,9 @@ class RemoteControlService : Service() {
             manager.allProviders?.let { names.addAll(it) }
         } catch (_: Exception) {
         }
-        val interval = if (isMc33()) 5_000L else locationMinIntervalMs
-        val distance = if (isMc33()) 0f else locationMinDistanceM
+        // Pede de 5 em 5 s a todos os provedores; o envio ao servidor continua limitado pelo intervalo do mapa.
+        val interval = 5_000L
+        val distance = 0f
         var asked = 0
         for (name in names) {
             try {
@@ -1321,38 +1329,76 @@ class RemoteControlService : Service() {
     }
 
     private fun sendWifiObservation() {
-        if (!isMc33()) return
         val now = System.currentTimeMillis()
         if (now - lastWifiLocateMs < 10 * 60 * 1000) return
-        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val cached = readWifiAps(wifi)
-        if (cached.length() > 0) {
-            lastWifiLocateMs = now
-            postWifiAps(cached)
-            return
-        }
-        wifiLocateReceiver?.let { runCatching { unregisterReceiver(it) } }
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                runCatching { unregisterReceiver(this) }
-                if (wifiLocateReceiver === this) wifiLocateReceiver = null
-                val aps = readWifiAps(wifi)
-                if (aps.length() == 0) {
-                    sendDeviceLog("warn", "MC33 sem GPS e sem redes Wi-Fi para estimar o ponto.")
-                    return
-                }
-                lastWifiLocateMs = System.currentTimeMillis()
+        lastWifiLocateMs = now
+        scanWifi { aps ->
+            if (aps.length() == 0) {
+                sendDeviceLog("warn", "Sem GPS e sem redes Wi-Fi para estimar o ponto.")
+            } else {
                 postWifiAps(aps)
             }
         }
-        wifiLocateReceiver = receiver
-        registerReceiver(receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
-        @Suppress("DEPRECATION")
-        val started = wifi.startScan()
-        if (!started) {
-            runCatching { unregisterReceiver(receiver) }
+    }
+
+    /**
+     * Varre o Wi-Fi e entrega as redes vistas (com o sinal). Se o Android recusar a varredura
+     * (limite de frequência), usa o último resultado guardado pelo sistema.
+     */
+    private fun scanWifi(done: (JSONArray) -> Unit) {
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLocateReceiver?.let { runCatching { unregisterReceiver(it) } }
+        var finished = false
+        val main = Handler(Looper.getMainLooper())
+        fun finish() {
+            if (finished) return
+            finished = true
+            wifiLocateReceiver?.let { runCatching { unregisterReceiver(it) } }
             wifiLocateReceiver = null
-            sendDeviceLog("warn", "MC33 não conseguiu varrer o Wi-Fi.")
+            done(readWifiAps(wifi))
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                finish()
+            }
+        }
+        wifiLocateReceiver = receiver
+        try {
+            registerReceiver(receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
+            @Suppress("DEPRECATION")
+            val started = wifi.startScan()
+            if (!started) {
+                finish()
+                return
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Varredura Wi-Fi: ${e.message}")
+            finish()
+            return
+        }
+        main.postDelayed({ finish() }, 8_000)
+    }
+
+    /** Rede Wi-Fi conectada: sinal (dBm), ponto de acesso, nome, frequência e velocidade. */
+    private fun wifiSnapshot(): JSONObject? {
+        return try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            val info = wifi.connectionInfo ?: return null
+            val bssid = info.bssid?.uppercase() ?: ""
+            if (bssid.isEmpty() || bssid == "02:00:00:00:00:00" || bssid == "00:00:00:00:00:00") return null
+            val rssi = info.rssi
+            if (rssi <= -127 || rssi >= 0) return null
+            val ssid = (info.ssid ?: "").trim('"').let { if (it == "<unknown ssid>") "" else it }
+            JSONObject().apply {
+                put("rssi", rssi)
+                put("bssid", bssid)
+                if (ssid.isNotEmpty()) put("ssid", ssid)
+                put("freq", info.frequency)
+                put("link", info.linkSpeed)
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -1389,7 +1435,7 @@ class RemoteControlService : Service() {
             put("data", JSONObject().apply { put("aps", aps) })
         }
         sendOrReconnect(payload.toString())
-        sendDeviceLog("info", "MC33 sem GPS. Estimando o ponto por ${aps.length()} rede(s) Wi-Fi.")
+        sendDeviceLog("info", "Sem GPS. Estimando o ponto por ${aps.length()} rede(s) Wi-Fi.")
     }
 
     fun syncAdminTimer() {
@@ -1465,7 +1511,7 @@ class RemoteControlService : Service() {
             sendDeviceLog("error", "Sem permissão de localização para atualização sob demanda.")
             return
         }
-        if (isMc33()) forceHighAccuracy()
+        forceHighAccuracy()
 
         try {
             val cached = newestKnownLocation()
@@ -1475,14 +1521,23 @@ class RemoteControlService : Service() {
             }
 
             var freshSent = false
+            var best: Location? = null
             val tempListener = object : LocationListener {
                 override fun onLocationChanged(location: Location) {
+                    // Fica ouvindo e só manda de novo quando a precisão melhora de verdade (20%+).
+                    val prev = best
+                    val acc = if (location.hasAccuracy()) location.accuracy else 999f
+                    if (prev != null && acc >= prev.accuracy * 0.8f) return
+                    best = location
                     sendLocationUpdateThrottled(location, force = true)
+                    if (!freshSent) sendDeviceLog("info", "Posição nova obtida (${location.provider}, ±${acc.toInt()} m).")
                     freshSent = true
-                    sendDeviceLog("info", "Posição nova obtida (${location.provider}).")
-                    try {
-                        locationManager?.removeUpdates(this)
-                    } catch (_: Exception) {
+                    if (acc <= 12f) {
+                        sendDeviceLog("info", "Posição precisa obtida (±${acc.toInt()} m).")
+                        try {
+                            locationManager?.removeUpdates(this)
+                        } catch (_: Exception) {
+                        }
                     }
                 }
                 @Deprecated("Deprecated in Java") override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
@@ -1492,38 +1547,34 @@ class RemoteControlService : Service() {
 
             val gpsOn = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
             val netOn = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
-            if (!gpsOn && !netOn && cached == null && !isMc33()) {
-                sendDeviceLog("warn", "Localização desligada no coletor.")
-                return
+            if (!gpsOn && !netOn) {
+                sendDeviceLog("warn", "GPS e localização por rede desligados no coletor. Tentando pelo Wi-Fi.")
             }
             try {
-                if (isMc33()) {
-                    subscribeMapProviders(tempListener)
-                } else {
-                    if (gpsOn) {
-                        locationManager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2_000L, 0f, tempListener, Looper.getMainLooper())
-                    }
-                    if (netOn) {
-                        locationManager?.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2_000L, 0f, tempListener, Looper.getMainLooper())
-                    }
-                }
+                subscribeMapProviders(tempListener)
             } catch (e: Exception) {
                 sendDeviceLog("warn", "Não foi possível pedir a localização: ${e.message}")
-                if (isMc33()) sendWifiObservation()
+                lastWifiLocateMs = 0L
+                sendWifiObservation()
                 return
             }
 
+            // Sem posição nova em 20 s: estima pelo Wi-Fi e continua ouvindo o GPS até 40 s.
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!freshSent) {
+                    lastWifiLocateMs = 0L
+                    sendWifiObservation()
+                }
+            }, 20_000)
             Handler(Looper.getMainLooper()).postDelayed({
                 try {
                     locationManager?.removeUpdates(tempListener)
-                    if (!freshSent && cached == null) {
-                        if (isMc33()) sendWifiObservation()
-                        else sendDeviceLog("warn", "Sem sinal de GPS nem posição de rede.")
-                    }
+                    val b = best
+                    if (b != null) sendDeviceLog("info", "Melhor posição do pedido: ${b.provider}, ±${b.accuracy.toInt()} m.")
                 } catch (e: Exception) {
                     Log.e(TAG, "Erro no timeout de localizacao: ${e.message}")
                 }
-            }, 20_000)
+            }, 40_000)
         } catch (e: SecurityException) {
             sendDeviceLog("error", "Erro de segurança ao ler localização sob demanda: ${e.message}")
         } catch (e: Exception) {
@@ -1550,6 +1601,13 @@ class RemoteControlService : Service() {
                 put("provider", location.provider)
                 val bssid = connectedBssid()
                 if (bssid.isNotEmpty()) put("bssid", bssid)
+                wifiSnapshot()?.let { put("rssi", it.optInt("rssi")) }
+                try {
+                    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    val aps = readWifiAps(wifi)
+                    if (aps.length() > 0) put("aps", aps)
+                } catch (_: Exception) {
+                }
             }
             
             val payload = JSONObject().apply {
