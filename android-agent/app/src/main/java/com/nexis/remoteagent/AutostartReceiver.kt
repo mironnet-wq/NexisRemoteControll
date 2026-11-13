@@ -20,6 +20,11 @@ class AutostartReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 android.util.Log.e("NexisAutostart", "Falha ao iniciar RemoteControlService: ${e.message}")
             }
+            if (KioskPolicy.mode(context) == "user") {
+                val home = Intent(context, KioskActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { context.startActivity(home) }
+            }
         }
     }
 }

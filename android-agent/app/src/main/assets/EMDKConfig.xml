@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wap-provisioningdoc>
+  <characteristic type="Profile">
+    <parm name="ProfileName" value="NexisWifiMac"/>
+    <characteristic version="8.3" type="AccessMgr">
+      <parm name="OperationMode" value="0"/>
+      <parm name="ServiceAccessAction" value="4"/>
+      <parm name="ServiceIdentifier" value="content://oem_info/oem.zebra.secure/wifi_mac"/>
+      <parm name="CallerPackageName" value="com.nexis.remoteagent"/>
+      <parm name="CallerSignature" value=""/>
+    </characteristic>
+  </characteristic>
+</wap-provisioningdoc>

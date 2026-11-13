@@ -47,3 +47,7 @@ backend/apks/*.checksum
 
 # Backups locais
 *.zip
+backend/.env
+
+# Temporarios do build do agente (Java/Gradle)
+.tmp-build/
